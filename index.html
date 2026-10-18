@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DICE TACTICS</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>DICE TACTICS</h1>
+      <div class="topbar-actions">
+        <label class="first-select">
+          先手
+          <select id="first">
+            <option value="human">あなた</option>
+            <option value="cpu">CPU</option>
+            <option value="random">ランダム</option>
+          </select>
+        </label>
+        <button id="btn-new" class="btn">新しいゲーム</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="board-area">
+        <div class="side-label monster">モンスター族（CPU）</div>
+        <div id="board" class="board" aria-label="10×10 の盤面"></div>
+        <div class="side-label human">人間族（あなた）</div>
+      </section>
+
+      <aside class="panel">
+        <div class="card status">
+          <span id="round" class="round"></span>
+          <span id="turn" class="turn"></span>
+        </div>
+
+        <div class="card dice-card">
+          <div class="dice-row">
+            <div id="dice" class="dice"></div>
+            <div id="ap-formula" class="ap-formula"></div>
+          </div>
+          <div class="ap-row">
+            <span class="ap-label">AP</span>
+            <div id="ap-bar" class="ap-bar"></div>
+            <span id="ap-text" class="ap-text"></span>
+          </div>
+          <div class="buttons">
+            <button id="btn-roll" class="btn primary">ダイスを振る <kbd>Space</kbd></button>
+            <button id="btn-undo" class="btn">移動を戻す <kbd>Z</kbd></button>
+            <button id="btn-end" class="btn">ターン終了 <kbd>E</kbd></button>
+          </div>
+          <div id="stages" class="stages"></div>
+          <div id="notice" class="notice" hidden></div>
+        </div>
+
+        <div class="card">
+          <div id="message" class="message"></div>
+          <div id="unit-info" class="unit-info"></div>
+        </div>
+
+        <div class="card log-card">
+          <h2>行動履歴</h2>
+          <ol id="log" class="log"></ol>
+        </div>
+
+        <details class="card rules">
+          <summary>ルール</summary>
+          <ul>
+            <li><b>勝利条件</b>: 相手のリーダーを撃破する。40 ラウンドで引き分け。</li>
+            <li><b>AP</b>: 毎ターン「基本 1 ＋ ダイス 3 個」。各ダイスは 0〜2（1〜7AP）。<b>リーダー以外の味方を失うたびに、ダイスが 1 個ずつ 0〜3 に強化</b>される（3 体で最大 1〜10AP）。強化は次のターンから。AP は持ち越さない。</li>
+            <li><b>移動</b>: 上下左右 1 マス＝1AP。岩・ユニットは通れない。各ユニット 1 ターンに移動 1 回・攻撃 1 回（移動 → 攻撃は可、攻撃 → 移動は不可）。</li>
+            <li><b>攻撃</b>: 上下左右の直線のみ。1 ダメージ。途中のユニットは射線を遮る。</li>
+          </ul>
+          <table>
+            <thead>
+              <tr><th>ユニット</th><th>HP</th><th>射程</th><th>攻撃</th><th>特徴</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>王 リーダー</td><td>4</td><td>隣接</td><td>1AP</td><td>倒されると敗北</td></tr>
+              <tr><td>戦 戦士 ×2</td><td>3</td><td>隣接</td><td>1AP</td><td></td></tr>
+              <tr><td>弓 弓使い ×2</td><td>2</td><td>2〜4</td><td>2AP</td><td>命中した敵を 1 マス押し出す。岩で射線が遮られる</td></tr>
+              <tr><td>魔 魔法使い</td><td>2</td><td>1〜2</td><td>2AP</td><td>岩を越えて攻撃できる</td></tr>
+            </tbody>
+          </table>
+        </details>
+      </aside>
+    </main>
+
+    <div id="result" class="result" hidden>
+      <div class="result-box">
+        <div id="result-title" class="result-title"></div>
+        <div id="result-sub" class="result-sub"></div>
+        <div class="buttons">
+          <button id="btn-again" class="btn primary">もう一度</button>
+          <button id="btn-close" class="btn">盤面を見る</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="src/ui/app.js"></script>
+  </body>
+</html>
