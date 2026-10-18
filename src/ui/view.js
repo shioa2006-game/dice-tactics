@@ -303,7 +303,8 @@ function renderStatus(game) {
     const roster = cfg.sideUnits[side]
       .map((u) => `<span class="unit-ico${s.pos[u] < 0 ? ' dead' : ''}" title="${unitName(cfg, u)}">${A.emblemIcon(cfg.unitType[u])}</span>`)
       .join('');
-    const html = `<div class="ss-head"><span class="ss-name">${side === HUMAN ? 'あなた' : 'CPU'}</span><span class="stage-badge${st > 0 ? ' up' : ''}" data-side="${side}" title="ダイス強化段階（失った味方 ${s.lost[side]} 体）">▲${st}</span><span class="ss-max">最大<b>${maxAP(s.lost[side])}</b>AP</span></div><div class="ss-roster">${roster}</div>`;
+    const lv = side === MONSTER && game.levelInfo ? `<span class="ss-level" title="難易度: ${game.levelInfo.name}">${'★'.repeat(game.levelInfo.stars)}</span>` : '';
+    const html = `<div class="ss-head"><span class="ss-name">${side === HUMAN ? 'あなた' : 'CPU'}${lv}</span><span class="stage-badge${st > 0 ? ' up' : ''}" data-side="${side}" title="ダイス強化段階（失った味方 ${s.lost[side]} 体）">▲${st}</span><span class="ss-max">最大<b>${maxAP(s.lost[side])}</b>AP</span></div><div class="ss-roster">${roster}</div>`;
     if (el.dataset.html !== html) {
       el.innerHTML = html;
       el.dataset.html = html;
@@ -558,10 +559,49 @@ export function showResult(game) {
     title.className = 'result-title';
     $('#result-sub').textContent = `${cfg.rules.maxRounds} ラウンドが終了しました`;
   }
+  if (game.levelInfo) {
+    const r = game.record;
+    const rec = r ? `（この難易度の戦績 ${r.w}勝 ${r.l}敗${r.d ? ` ${r.d}分` : ''}）` : '';
+    $('#result-sub').innerHTML += `<br><span class="result-level">CPU の難易度: ${'★'.repeat(game.levelInfo.stars)} ${game.levelInfo.name}</span> ${rec}`;
+    if (game.personaHint) $('#result-sub').innerHTML += `<br><span class="result-hint">ヒント: ${escapeHTML(game.personaHint)}</span>`;
+    if (game.suggest) $('#result-sub').innerHTML += `<br>${escapeHTML(game.suggest)}`;
+  }
   $('#result-stats').innerHTML = statsHTML(game.stats);
   $('#result').hidden = false;
   $('#btn-again').focus();
 }
+
+// ---------------------------------------------------------------------------
+// タイトル画面
+// ---------------------------------------------------------------------------
+
+/**
+ * タイトル画面を描く。
+ * @param {{levels: string[], info: object, selected: string, first: string, records: object, tag: {level, text}|null}} o
+ */
+export function renderTitle(o) {
+  if (!$('#title-orn').innerHTML) $('#title-orn').innerHTML = A.rosetteSVG() + A.rosetteSVG() + A.rosetteSVG();
+  $('#title-levels').innerHTML = o.levels
+    .map((k) => {
+      const i = o.info[k];
+      const r = o.records[k];
+      const rec = r && r.w + r.l + r.d > 0 ? `<span class="level-record">${r.w}勝 ${r.l}敗${r.d ? ` ${r.d}分` : ''}</span>` : '';
+      const tag = o.tag && o.tag.level === k ? `<span class="level-tag">${escapeHTML(o.tag.text)}</span>` : '';
+      return `<button class="level-btn" role="radio" data-level="${k}" aria-checked="${k === o.selected}"><span class="level-stars" aria-hidden="true">${'★'.repeat(i.stars)}${'☆'.repeat(3 - i.stars)}</span><span class="level-name">${i.name}</span><span class="level-desc">${escapeHTML(i.desc)}</span>${tag}${rec}</button>`;
+    })
+    .join('');
+  document.querySelectorAll('#title-first button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.v === o.first)));
+}
+
+export function showTitle() {
+  $('#title').hidden = false;
+  const btn = $('#btn-start');
+  if (btn) btn.focus();
+}
+export function hideTitle() {
+  $('#title').hidden = true;
+}
+export const titleOpen = () => !$('#title').hidden;
 
 /** 終了時の統計（あなた / CPU） */
 function statsHTML(st) {

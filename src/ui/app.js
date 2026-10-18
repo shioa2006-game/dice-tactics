@@ -6,6 +6,7 @@ import { makeConfig, HUMAN, MONSTER, LEADER, ATTACKED, SIDE_NAMES, unitName } fr
 import { maxAP, meanAP, apDistribution, stageOf } from '../core/dice.js';
 import * as R from '../core/rules.js';
 import { requestPlan } from './cpu.js';
+import { LEVELS, LEVEL_INFO, DEFAULT_LEVEL, PERSONAS, pickPersona } from '../core/levels.js';
 import * as V from './view.js';
 import * as FX from './fx.js';
 import * as AE from './audio/engine.js';
@@ -68,13 +69,39 @@ function newGame() {
   V.hideToast();
   V.hideResult();
   V.closeSheets();
+  V.hideTitle();
   const v = settings.first;
   const first = v === 'cpu' ? MONSTER : v === 'random' ? (Math.random() < 0.5 ? HUMAN : MONSTER) : HUMAN;
   game.id++;
   game.state = R.createGame(cfg, { firstSide: first });
-  Object.assign(game, { sel: -1, preview: null, busy: false, acting: -1, undo: [], log: [], notice: null, msg: null, cpuNote: '', cpuSub: '', cpuThinking: false, endArmed: false, diceAnimating: false, apFresh: false, trails: [], stats: [newStats(), newStats()] });
+  const level = LEVELS[settings.level] ? settings.level : DEFAULT_LEVEL;
+  Object.assign(game, {
+    sel: -1,
+    preview: null,
+    busy: false,
+    acting: -1,
+    undo: [],
+    log: [],
+    notice: null,
+    msg: null,
+    cpuNote: '',
+    cpuSub: '',
+    cpuThinking: false,
+    endArmed: false,
+    diceAnimating: false,
+    apFresh: false,
+    trails: [],
+    stats: [newStats(), newStats()],
+    level,
+    levelInfo: LEVEL_INFO[level],
+    cpuPersona: pickPersona(level), // やさしいの性格（1 局に 1 つ。ほかの難易度は null）
+    cpuPrevStart: null,
+    record: null,
+    suggest: '',
+    personaHint: '',
+  });
   disarmNew();
-  log('sys', `新しいゲーム（先手: ${first === HUMAN ? 'あなた' : 'CPU'}）`);
+  log('sys', `新しいゲーム（CPU の難易度: ${LEVEL_INFO[level].name}、先手: ${first === HUMAN ? 'あなた' : 'CPU'}）`);
   snd(() => S.stopStinger(0.3));
   snd(() => S.newGame());
   snd(() => Music.restart()); // 設定でオン・消音でなければ曲の頭からかけ直す
@@ -214,7 +241,9 @@ async function cpuTurn() {
   const s0 = game.state;
   const dice = R.rollDiceFor(s0, Math.random);
   const s1 = R.beginTurn(s0, dice);
-  const planP = requestPlan(s1); // ダイスの演出中に考え始める
+  // ダイスの演出中に考え始める。往復防止のため、前の CPU のターンの開始時の駒の位置も渡す
+  const planP = requestPlan(s1, { level: game.level, prevStart: game.cpuPrevStart, persona: game.cpuPersona });
+  game.cpuPrevStart = Array.from(s1.pos);
   game.diceAnimating = true;
   render();
   await FX.rollDice(dice, s1.diceMax, sp.anim);
@@ -299,6 +328,7 @@ function finish() {
   countUsedAP(s);
   Object.assign(game, { mode: 'over', sel: -1, preview: null, busy: false, acting: -1, msg: null });
   log('sys', s.winner === 'draw' ? '引き分け' : s.winner === HUMAN ? 'あなたの勝ち' : 'CPU の勝ち');
+  recordResult(s.winner);
   render();
   snd(() => S.result(s.winner === 'draw' ? 'draw' : s.winner === HUMAN ? 'victory' : 'defeat'));
   setTimeout(() => {
@@ -564,6 +594,18 @@ function onKey(e) {
     if (e.key === 'Enter' || e.code === 'Space') e.preventDefault();
     return;
   }
+  // タイトル画面: 1〜3 で難易度を選び、Enter / Space ではじめる（フォーカス中のボタンはそのボタンに任せる）
+  if (V.titleOpen()) {
+    const keys = Object.keys(LEVELS);
+    if (/^[1-3]$/.test(e.key) && keys[+e.key - 1]) {
+      titleLevel = keys[+e.key - 1];
+      renderTitle();
+    } else if ((e.key === 'Enter' || e.code === 'Space') && tag !== 'BUTTON') {
+      e.preventDefault();
+      startFromTitle();
+    }
+    return;
+  }
   if (e.key === 'Escape') {
     if (V.sheetOpen()) V.closeSheets();
     else if (!document.getElementById('result').hidden) V.hideResult();
@@ -702,13 +744,102 @@ function render() {
 // 設定
 // ---------------------------------------------------------------------------
 
+/**
+ * 設定を読む。難易度（level）の既定は、はじめての人なら「やさしい」、これまで遊んでいた人（設定は保存されているが
+ * 難易度がない）なら「むずかしい」（= これまでの CPU。知らないうちに強さが変わらないように）。
+ */
 function loadSettings() {
   const def = { first: 'human', speed: 'normal', quick: false, calm: false };
+  let saved = null;
   try {
-    return { ...def, ...JSON.parse(localStorage.getItem('dice-tactics.settings') || '{}') };
+    saved = JSON.parse(localStorage.getItem('dice-tactics.settings') || 'null');
   } catch {
-    return def;
+    saved = null;
   }
+  const s = { ...def, ...(saved || {}) };
+  if (!LEVELS[s.level]) {
+    s.level = saved ? 'hard' : 'easy';
+    s.levelTag = saved ? 'これまでの CPU' : 'はじめての方に';
+  }
+  return s;
+}
+
+// ---------------------------------------------------------------------------
+// 難易度ごとの戦績
+// ---------------------------------------------------------------------------
+
+const RECORD_KEY = 'dice-tactics.records';
+function loadRecords() {
+  try {
+    return JSON.parse(localStorage.getItem(RECORD_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+}
+function recordResult(winner) {
+  const recs = loadRecords();
+  const r = (recs[game.level] ||= { w: 0, l: 0, d: 0 });
+  if (winner === HUMAN) r.w++;
+  else if (winner === 'draw') r.d++;
+  else r.l++;
+  try {
+    localStorage.setItem(RECORD_KEY, JSON.stringify(recs));
+  } catch {
+    // 保存できない環境では記録しない
+  }
+  game.record = r;
+  // やさしいは、対局の後で CPU の思い違い（性格）を明かす。次の対局の作戦につながるように
+  game.personaHint = game.cpuPersona && PERSONAS[game.cpuPersona] ? PERSONAS[game.cpuPersona].hint : '';
+  // 勝ち越してきたら、ひとつ上の難易度をすすめる
+  const order = Object.keys(LEVELS);
+  const up = order[order.indexOf(game.level) + 1];
+  game.suggest = winner === HUMAN && up && r.w >= 3 && r.w > r.l ? `「${LEVEL_INFO[game.level].name}」で ${r.w} 勝しました。次は「${LEVEL_INFO[up].name}」に挑戦してみませんか？（タイトルで選べます）` : '';
+}
+
+// ---------------------------------------------------------------------------
+// タイトル画面
+// ---------------------------------------------------------------------------
+
+let titleLevel = settings.level;
+
+function renderTitle() {
+  const recs = loadRecords();
+  // 勝ち越している難易度の 1 つ上に「挑戦」の印を付ける（はじめての人・これまでの人の印が優先）
+  let tag = settings.levelTag ? { level: settings.level, text: settings.levelTag } : null;
+  if (!tag) {
+    const order = Object.keys(LEVELS);
+    for (let i = 0; i < order.length - 1; i++) {
+      const r = recs[order[i]];
+      if (r && r.w >= 3 && r.w > r.l && !(recs[order[i + 1]] && recs[order[i + 1]].w + recs[order[i + 1]].l > 0)) tag = { level: order[i + 1], text: '挑戦してみよう' };
+    }
+  }
+  V.renderTitle({ levels: Object.keys(LEVELS), info: LEVEL_INFO, selected: titleLevel, first: settings.first, records: recs, tag });
+}
+
+/** タイトル画面を出す（対局は止める） */
+function goTitle() {
+  FX.cancelAll();
+  game.id++; // 進行中の CPU の手番を止める
+  Object.assign(game, { mode: 'title', busy: false, sel: -1, preview: null, acting: -1, msg: null });
+  disarmEnd();
+  disarmNew();
+  V.hideResult();
+  V.closeSheets();
+  V.hideToast();
+  snd(() => S.stopStinger(0.2));
+  if (!game.state) game.state = R.createGame(cfg, { firstSide: HUMAN });
+  titleLevel = LEVELS[settings.level] ? settings.level : DEFAULT_LEVEL;
+  renderTitle();
+  render();
+  V.showTitle();
+}
+
+/** タイトル画面の「対局をはじめる」 */
+function startFromTitle() {
+  settings.level = titleLevel;
+  delete settings.levelTag;
+  saveSettings();
+  newGame();
 }
 function saveSettings() {
   try {
@@ -719,7 +850,6 @@ function saveSettings() {
 }
 
 function applySettingsUI() {
-  document.getElementById('set-first').value = settings.first;
   document.querySelectorAll('#set-speed button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.v === settings.speed)));
   document.getElementById('set-quick').checked = settings.quick;
   document.getElementById('set-calm').checked = settings.calm;
@@ -760,18 +890,18 @@ function onNewGame() {
   const inProgress = game.mode !== 'over' && (game.state.turn > 1 || game.mode === 'act');
   if (inProgress && !btn.classList.contains('armed')) {
     btn.classList.add('armed');
-    btn.textContent = '対局を破棄して最初から？（もう一度押す）';
+    btn.textContent = '対局を破棄してタイトルへ？（もう一度押す）';
     clearTimeout(newArmTimer);
     newArmTimer = setTimeout(disarmNew, ARM_MS);
     return;
   }
-  newGame();
+  goTitle();
 }
 function disarmNew() {
   clearTimeout(newArmTimer);
   const btn = document.getElementById('btn-new');
   btn.classList.remove('armed');
-  btn.textContent = '新しいゲーム';
+  btn.textContent = 'タイトルに戻る（新しいゲーム）';
 }
 
 // ---------------------------------------------------------------------------
@@ -787,7 +917,25 @@ document.getElementById('btn-undo').addEventListener('click', undoMove);
 document.getElementById('btn-confirm').addEventListener('click', confirmPreview);
 document.getElementById('btn-again').addEventListener('click', newGame);
 document.getElementById('btn-close').addEventListener('click', V.hideResult);
+document.getElementById('btn-title').addEventListener('click', goTitle);
 document.getElementById('btn-new').addEventListener('click', onNewGame);
+// タイトル画面: 難易度・先手を選んで「対局をはじめる」
+document.getElementById('title-levels').addEventListener('click', (e) => {
+  const b = e.target.closest('.level-btn');
+  if (!b) return;
+  titleLevel = b.dataset.level;
+  snd(() => S.select());
+  renderTitle();
+});
+document.querySelectorAll('#title-first button').forEach((b) =>
+  b.addEventListener('click', () => {
+    settings.first = b.dataset.v;
+    saveSettings();
+    snd(() => S.select());
+    renderTitle();
+  }),
+);
+document.getElementById('btn-start').addEventListener('click', startFromTitle);
 document.getElementById('btn-threat').addEventListener('click', (e) => {
   game.threat = !game.threat;
   e.currentTarget.setAttribute('aria-pressed', String(game.threat));
@@ -796,10 +944,6 @@ document.getElementById('btn-threat').addEventListener('click', (e) => {
 document.querySelectorAll('[data-sheet]').forEach((b) => b.addEventListener('click', () => V.openSheet(b.dataset.sheet)));
 document.querySelectorAll('.sheet-close').forEach((b) => b.addEventListener('click', V.closeSheets));
 document.getElementById('sheet-back').addEventListener('click', V.closeSheets);
-document.getElementById('set-first').addEventListener('change', (e) => {
-  settings.first = e.target.value;
-  saveSettings();
-});
 document.querySelectorAll('#set-speed button').forEach((b) =>
   b.addEventListener('click', () => {
     settings.speed = b.dataset.v;
@@ -867,5 +1011,6 @@ AE.onUnlock(() => {
 applySettingsUI();
 
 // 動作確認・デバッグ用（ブラウザのコンソールから参照できる）
-window.__dt = { game, cfg, settings, act, roll: humanRoll, end: endHumanTurn, newGame, R, audio: { AE, S, Music } };
-newGame();
+window.__dt = { game, cfg, settings, act, roll: humanRoll, end: endHumanTurn, newGame, goTitle, startFromTitle, R, audio: { AE, S, Music } };
+// 起動するとタイトル画面を出す（盤面は初期配置のまま後ろに見せる）
+goTitle();

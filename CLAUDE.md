@@ -8,6 +8,7 @@
 
 ## このリポジトリ
 
-- DICE TACTICS の基本形（10×10・各陣営 6 体・被害連動ダイス・CPU 標準）。ルールは RULES.md、構成は README.md。
+- DICE TACTICS の基本形（10×10・各陣営 6 体・被害連動ダイス・CPU 3 段階。むずかしい = CPU 標準）。ルールは RULES.md、構成は README.md。
+- CPU 標準（ai.js の `CPU`、難易度「むずかしい」）は 1 手も変えない。tests/levels.test.js が照合データと比べて確かめる。
 - `src/core/`（ルール・ダイス・CPU）は UI に依存しない。UI の改善は主に `src/ui/`・`index.html`・`styles.css` で行う。
 - ルールや CPU を変えたら `npm test` を実行する。

@@ -96,14 +96,6 @@
     <section class="sheet" id="sheet-settings" role="dialog" aria-label="設定" hidden>
       <div class="sheet-head"><h2>設定</h2><button class="btn ghost sheet-close">閉じる</button></div>
       <div class="sheet-body settings">
-        <label class="row">
-          <span>先手</span>
-          <select id="set-first">
-            <option value="human">あなた</option>
-            <option value="cpu">CPU</option>
-            <option value="random">ランダム</option>
-          </select>
-        </label>
         <div class="row">
           <span>CPU の再生速度</span>
           <div class="seg" id="set-speed" role="radiogroup" aria-label="CPU の再生速度">
@@ -129,7 +121,7 @@
           <input type="range" id="set-bgm-vol" min="0" max="100" step="5" aria-label="BGM の音量" />
         </div>
         <p class="note">BGM は最初にオンにしたとき、曲の準備に数秒かかります。音は最初に画面をタップしたあとに鳴ります。</p>
-        <button id="btn-new" class="btn primary wide">新しいゲーム</button>
+        <button id="btn-new" class="btn primary wide">タイトルに戻る（新しいゲーム）</button>
         <p class="note">キー操作: Space = ダイスを振る / Enter = 確定 / E = ターン終了 / Z = 移動を戻す / 1〜6 = 自軍の駒を選ぶ / Esc = 取り消し</p>
       </div>
     </section>
@@ -145,6 +137,27 @@
           <button id="btn-again" class="btn primary">もう一度</button>
           <button id="btn-close" class="btn ghost">盤面を見る</button>
         </div>
+        <button id="btn-title" class="btn ghost wide result-title-btn">難易度を変える（タイトルへ）</button>
+      </div>
+    </div>
+
+    <!-- タイトル画面 -->
+    <div id="title" class="title-screen" hidden>
+      <div class="title-box" role="dialog" aria-labelledby="title-logo">
+        <div class="title-orn" id="title-orn"></div>
+        <h1 id="title-logo" class="title-logo">DICE TACTICS</h1>
+        <p class="title-sub">ダイスで得た AP を配り、相手のリーダーを討て</p>
+        <div class="title-levels" id="title-levels" role="radiogroup" aria-label="難易度"></div>
+        <div class="title-first">
+          <span>先手</span>
+          <div class="seg" id="title-first" role="radiogroup" aria-label="先手">
+            <button data-v="human" role="radio">あなた</button>
+            <button data-v="cpu" role="radio">CPU</button>
+            <button data-v="random" role="radio">ランダム</button>
+          </div>
+        </div>
+        <button id="btn-start" class="btn primary wide title-start">対局をはじめる</button>
+        <p class="title-note">どの難易度も、ルールとダイスは同じです。CPU は未来の出目を見ません。変わるのは考え方だけです。</p>
       </div>
     </div>
 

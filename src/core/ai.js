@@ -52,7 +52,12 @@ const PARAMS = {
   actionPenalty: 0.01, // 同価値なら行動数の少ない（意図の明確な）プラン
 };
 
-/** CPU（標準）の設定。planTurn(state, { cpu }) で上書きできる */
+/**
+ * CPU（標準）の設定。planTurn(state, { cpu }) で上書きできる。難易度は src/core/levels.js（標準 = むずかしい）。
+ * 難易度用に、標準にはない次の項目を使える（ない場合は何もしない）:
+ *   oppApQuantile  相手の次ターンの AP をこの分位点で頭打ちにして読む（0.5 = 中央値。大きな出目への備えが甘くなる）
+ *   pickTemp / pickMaxDrop / pickSafe  最善手の近くの候補から確率的に選ぶ（pickNearBest）
+ */
 export const CPU = {
   name: '標準',
   params: PARAMS,
@@ -312,19 +317,48 @@ function makeCtx(state, cpu) {
     VAL: valueTable(cfg, P),
     aggro: aggroFactor(P, roundOf(state)),
     stageInfo: [], // 強化段階ごとの { dist, max }
+    me: state.side,
+    oppStageInfo: [], // 相手の AP を楽観的に見積もるとき（cpu.oppApQuantile）の { dist, max }
   };
 }
 
 /**
  * 局面 s で side 陣営が「次に」得る AP の分布。s の時点の累計喪失数（その局面までの撃破を含む）
  * から決まる。こちらが敵を倒した局面では、相手の次のダイスが強化されることを織り込む。
+ * cpu.oppApQuantile があるときは、相手の AP をその分位点（0.5 = 中央値）で頭打ちにして見積もる（難易度用）。
  * @returns {{dist: number[][], max: number}}
  */
 function apInfo(ctx, s, side) {
   const st = stageOf(s.lost[side]);
+  if (ctx.cpu.oppApQuantile !== undefined && side !== ctx.me) {
+    let c = ctx.oppStageInfo[st];
+    if (!c) ctx.oppStageInfo[st] = c = cappedDist(apDistribution(st), ctx.cpu.oppApQuantile);
+    return c;
+  }
   let e = ctx.stageInfo[st];
   if (!e) ctx.stageInfo[st] = e = { dist: apDistribution(st), max: maxAP(st) };
   return e;
+}
+
+/** AP の分布を、累積確率が q に届く AP で頭打ちにする（それより大きい AP の確率はその AP にまとめる） */
+function cappedDist(dist, q) {
+  let cdf = 0;
+  let cap = dist[dist.length - 1][0];
+  for (const [ap, p] of dist) {
+    cdf += p;
+    if (cdf >= q - 1e-9) {
+      cap = ap;
+      break;
+    }
+  }
+  const out = [];
+  let rest = 0;
+  for (const [ap, p] of dist) {
+    if (ap < cap) out.push([ap, p]);
+    else rest += p;
+  }
+  out.push([cap, rest]);
+  return { dist: out, max: cap };
 }
 
 function aggroFactor(P, round) {
@@ -1024,7 +1058,8 @@ function preselect(terms, me, ctx, o) {
 /**
  * 手番の陣営の行動計画を立てる。
  * @param {object} state 自分の手番で phase='act'（AP 確定済み）
- * @param {{cpu?: object, rng?: () => number}} opts
+ * @param {{cpu?: object, rng?: () => number, prevStart?: number[]}} opts
+ *   prevStart: 前のターンの開始時の駒の位置（難易度の往復防止用。cpu.pickTemp があるときだけ使う）
  * @returns {{actions: object[], info: object}} actions はルールエンジンでそのまま適用できる行動の列
  */
 export function planTurn(state, opts = {}) {
@@ -1075,20 +1110,62 @@ export function planTurn(state, opts = {}) {
     replyNodes += r.nodes;
     node.deep = expectOver(r.value, apInfo(ctx, node.s, me ^ 1).dist);
     const sc = node.deep + 0.05 * node.fast.total - P.actionPenalty * node.depth + node.noise;
+    if (cpu.pickTemp) {
+      node.sc = sc;
+      node.worst = r.value[r.value.length - 1]; // 想定する最大の AP で相手が選ぶ最悪の評価
+    }
     if (sc > best) {
       best = sc;
       chosen = node;
     }
   }
 
-  return {
-    actions: actionsOf(chosen),
-    info: { ap: state.ap, search: useBeam ? 'beam' : 'exact', nodes: enumRes.nodes, terminals: allTerms.length, candidates: pick.size, replyNodes, ms: now() - t0, truncated: !!enumRes.truncated, timeCut },
+  const info = { ap: state.ap, search: useBeam ? 'beam' : 'exact', nodes: enumRes.nodes, terminals: allTerms.length, candidates: pick.size, replyNodes, ms: now() - t0, truncated: !!enumRes.truncated, timeCut };
+  if (cpu.pickTemp && chosen) {
+    const best0 = chosen;
+    chosen = pickNearBest([...pick], chosen, best, state, cpu, rng, opts.prevStart);
+    info.slipped = chosen !== best0;
+  }
+  return { actions: actionsOf(chosen), info };
+}
+
+/**
+ * 難易度用: 最善手から cpu.pickMaxDrop 点以内の候補を、差が小さいほど選ばれやすい確率（温度 cpu.pickTemp）で 1 つ選ぶ。
+ * どの候補も相手の反撃まで読んだ計画なので、1 手ずつ見れば筋は通っている。次の安全柵を付ける。
+ *  - cpu.pickSafe: 最善手が想定内の AP でリーダーを失わないなら、失う候補は選ばない
+ *  - prevStart（前のターンの開始時の駒の位置）: 駒を前のターンの位置へ戻す候補は、最善手でなければ選ばない（往復を防ぐ）
+ * 勝てる手順はこの処理の前に返しているので、届く勝ちは必ず取る。
+ */
+function pickNearBest(cands, chosen, best, state, cpu, rng, prevStart) {
+  const me = state.side;
+  const safeBest = !cpu.pickSafe || chosen.worst > -WIN_SCORE / 2;
+  const backtracks = (n) => {
+    if (!prevStart) return false;
+    for (const u of state.cfg.sideUnits[me]) {
+      const f = prevStart[u];
+      if (f >= 0 && n.s.pos[u] === f && state.pos[u] !== f) return true;
+    }
+    return false;
   };
+  const pool = cands.filter(
+    (n) =>
+      n.sc !== undefined &&
+      n.sc >= best - (cpu.pickMaxDrop ?? Infinity) &&
+      (!cpu.pickSafe || !safeBest || n.worst > -WIN_SCORE / 2) &&
+      (n === chosen || !backtracks(n)),
+  );
+  let z = 0;
+  for (const n of pool) z += n.w = Math.exp((n.sc - best) / cpu.pickTemp);
+  let r = rng() * z;
+  for (const n of pool) {
+    r -= n.w;
+    if (r <= 0) return n;
+  }
+  return chosen;
 }
 
 function now() {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
-export { actionsOf, makeCtx };
+export { actionsOf, makeCtx, cappedDist, pickNearBest };
