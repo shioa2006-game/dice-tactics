@@ -27,7 +27,13 @@ export const still = () => calm || reducedMQ.matches || document.hidden;
 function play(el, keyframes, ms, easing = 'ease-in-out') {
   if (still() || !el.animate) return Promise.resolve();
   const duration = Math.max(1, ms * factor);
-  const a = el.animate(keyframes, { duration, easing });
+  let a;
+  try {
+    a = el.animate(keyframes, { duration, easing });
+  } catch (err) {
+    console.error('演出を省略しました:', err);
+    return Promise.resolve();
+  }
   running.add(a);
   return Promise.race([a.finished.catch(() => {}), sleep(duration + 150)]).then(() => running.delete(a));
 }
@@ -60,8 +66,23 @@ export function cancelAll() {
 // 行動の再生
 // ---------------------------------------------------------------------------
 
+/**
+ * 演出の中で例外が起きても、呼び出し側（ゲームの進行）は止めない。
+ * 演出は見た目だけなので、失敗したら打ち切り、続きは通常の描画に任せる。
+ */
+function safe(fn) {
+  return async (...args) => {
+    try {
+      await fn(...args);
+    } catch (err) {
+      console.error('演出を打ち切りました:', err);
+      cancelAll();
+    }
+  };
+}
+
 /** events（applyAction の戻り値）を順に再生する */
-export async function playEvents(events, { speed = 1 } = {}) {
+export const playEvents = safe(async (events, { speed = 1 } = {}) => {
   factor = speed;
   let attack = null;
   const tails = []; // 最後まで待つ演出（近接攻撃の戻りなど）
@@ -77,7 +98,7 @@ export async function playEvents(events, { speed = 1 } = {}) {
     else if (e.type === 'knockbackBlocked') await blocked(e, attack);
   }
   await Promise.all(tails);
-}
+});
 
 async function move(e) {
   const el = V.pieceEl(e.unit);
@@ -130,7 +151,12 @@ async function strike(e) {
     300,
     'ease-in-out',
   ).then(() => el.classList.remove('lifted'));
-  await wait(135);
+  await wait(120);
+  // 斬撃: 対象のマスを斜めに走る一筋の光
+  const sl = fxEl('fx-slash', V.at(tx, ty));
+  play(sl, [{ opacity: 0, clipPath: 'inset(0 100% 0 0)' }, { opacity: 1, clipPath: 'inset(0 0 0 0)', offset: 0.45 }, { opacity: 0, clipPath: 'inset(0 0 0 0)' }], 260, 'ease-out').then(() => sl.remove());
+  if (still()) sl.remove();
+  await wait(40);
   return lunge;
 }
 
@@ -207,19 +233,19 @@ async function blocked(e, attack) {
 }
 
 /** 「移動を戻す」: 駒を元のマスへ滑らせる */
-export async function slide(u, from, to, speed = 1) {
+export const slide = safe(async (u, from, to, speed = 1) => {
   factor = speed;
   const el = V.pieceEl(u);
   el.style.transform = V.cellTransform(to);
   await play(el, [{ transform: V.cellTransform(from) }, { transform: V.cellTransform(to) }], 200, 'ease-out');
-}
+});
 
 // ---------------------------------------------------------------------------
 // ダイス
 // ---------------------------------------------------------------------------
 
 /** ダイスを転がす（出目はすでに決まっている。表示だけを揺らしてから止める） */
-export async function rollDice(values, maxes, speed = 1) {
+export const rollDice = safe(async (values, maxes, speed = 1) => {
   if (still()) return;
   const dur = 560 * speed;
   const t0 = performance.now();
@@ -233,4 +259,4 @@ export async function rollDice(values, maxes, speed = 1) {
   }
   V.showDice(values, maxes, 'landed');
   await sleep(160 * speed);
-}
+});

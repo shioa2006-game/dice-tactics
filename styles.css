@@ -526,7 +526,8 @@ button {
   background-color: var(--target-tint);
 }
 .cell.target::after,
-.cell.after::after {
+.cell.after::after,
+.cell.short::after {
   content: '';
   position: absolute;
   inset: 2px;
@@ -559,10 +560,21 @@ button {
   --w: 2px;
   --l: 22%;
 }
+/* 移動プレビュー中: 射線は通るが AP が足りない敵（灰色の鉤形） */
+.cell.short::after {
+  --c: rgba(70, 70, 80, 0.75);
+  --w: 2px;
+  --l: 22%;
+}
 
 /* 敵の射程（平均 AP で狙われる味方） */
 .cell.threat {
   background-image: repeating-linear-gradient(-45deg, rgba(200, 50, 31, 0.45) 0 1.2cqw, transparent 1.2cqw 2.4cqw);
+}
+
+/* 調べている敵が、攻撃の前に移動しうる範囲（橙の点） */
+.cell.ezone:not(.rock) {
+  background-image: radial-gradient(circle, rgba(208, 96, 63, 0.55) 0.7cqw, transparent 0.8cqw), linear-gradient(rgba(255, 160, 110, 0.18), rgba(255, 160, 110, 0.18));
 }
 
 /* 状態の外枠（駒の美術とは独立） */
@@ -646,6 +658,43 @@ button {
 }
 .ov-push-head {
   fill: #e2461f;
+}
+/* CPU の直前の移動経路 */
+.ov-trail {
+  fill: none;
+  stroke: #ff7a2e;
+  stroke-width: 0.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1.6 1.2;
+  opacity: 0.85;
+}
+.ov-trail-from {
+  fill: rgba(255, 245, 230, 0.8);
+  stroke: #ff7a2e;
+  stroke-width: 0.7;
+}
+.ov-trail-head {
+  fill: #ff7a2e;
+}
+/* 敵の脅威: 味方を攻撃するのに必要な最小 AP */
+.ov-cost circle {
+  fill: #fff4e6;
+  stroke: #d0603f;
+  stroke-width: 0.55;
+}
+.ov-cost text {
+  font-family: var(--serif);
+  font-size: 2.8px;
+  font-weight: 700;
+  fill: #8a2a12;
+}
+.ov-cost.likely circle {
+  fill: #d0603f;
+  stroke: #fff4e6;
+}
+.ov-cost.likely text {
+  fill: #fff;
 }
 .ov-block {
   stroke: #1b1b1b;
@@ -857,6 +906,15 @@ button {
   box-shadow:
     0 0 2.5cqw #ff7a4d,
     inset 0 0 2cqw #ff7a4d;
+}
+.fx-slash::before {
+  content: '';
+  width: 120%;
+  height: 0.9cqw;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, #fff 35%, #ffe08a 65%, transparent);
+  box-shadow: 0 0 1.4cqw #ffd36b;
+  transform: rotate(-38deg);
 }
 .fx-float {
   font-family: var(--serif);
@@ -1666,6 +1724,32 @@ button {
   margin: 6px 0 16px;
   color: var(--muted);
   font-size: 13px;
+}
+.result-stats {
+  width: 100%;
+  margin: -6px 0 14px;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.result-stats th,
+.result-stats td {
+  padding: 3px 6px;
+  border-bottom: 1px solid rgba(217, 180, 90, 0.18);
+  text-align: right;
+}
+.result-stats td:first-child {
+  text-align: left;
+  color: var(--muted);
+}
+.result-stats th.h {
+  color: var(--human-hi);
+}
+.result-stats th.m {
+  color: var(--monster-hi);
+}
+.result-stats td:not(:first-child) {
+  font-family: var(--serif);
+  font-weight: 700;
 }
 .result-buttons {
   display: flex;

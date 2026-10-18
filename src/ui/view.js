@@ -114,6 +114,7 @@ function renderBoard(game) {
   const pv = game.preview;
   const path = new Set(pv && pv.kind === 'move' ? pv.path.slice(0, -1) : []);
   const after = new Set(pv && pv.kind === 'move' ? pv.after : []);
+  const short = new Set(pv && pv.kind === 'move' ? pv.short : []);
   const threat = game.threatSet || new Set();
   for (let c = 0; c < cfg.CELLS; c++) {
     const el = cellEls[c];
@@ -126,10 +127,12 @@ function renderBoard(game) {
     el.classList.toggle('target', u >= 0 && targets.has(u));
     el.classList.toggle('pv', u >= 0 && pv && pv.kind === 'attack' && pv.target === u);
     el.classList.toggle('after', u >= 0 && after.has(u));
+    el.classList.toggle('short', u >= 0 && short.has(u));
     el.classList.toggle('sel', u >= 0 && u === game.sel && cfg.unitSide[u] === HUMAN);
     el.classList.toggle('inspect', u >= 0 && u === game.sel && cfg.unitSide[u] !== HUMAN);
     el.classList.toggle('acting', u >= 0 && u === game.acting);
     el.classList.toggle('threat', u >= 0 && threat.has(u));
+    el.classList.toggle('ezone', !!(game.inspectThreat && game.inspectThreat.zone.has(c)));
     const cost = m ? `<span class="cost">${m.cost}</span>` : '';
     if (el.innerHTML !== cost) el.innerHTML = cost;
     el.setAttribute('aria-label', cellLabel(s, c, u, m, targets.has(u)));
@@ -146,19 +149,57 @@ function cellLabel(s, c, u, m, isTarget) {
   return t;
 }
 
-/** プレビューの線（移動の経路・攻撃の射線・押し出し先） */
+const P = (c) => {
+  const [x, y] = xy(c);
+  return [x * 10 + 5, y * 10 + 5];
+};
+
+/** 盤面の上の線: CPU の直前の移動経路・敵の脅威（最小 AP）・プレビュー（経路・射線・押し出し先） */
 function renderOverlay(game) {
+  const ov = $('#overlay');
+  const h = trailSVG(game.trails || []) + threatSVG(game) + previewSVG(game);
+  if (ov.innerHTML !== h) ov.innerHTML = h;
+}
+
+/** CPU がこのターンに動かした経路（橙の点線。出発点は輪、到着点は矢じり） */
+function trailSVG(trails) {
+  let h = '';
+  for (const cells of trails) {
+    if (cells.length < 2) continue;
+    const pts = cells.map(P);
+    const [sx, sy] = pts[0];
+    const [ex, ey] = pts[pts.length - 1];
+    const [px, py] = pts[pts.length - 2];
+    const dx = Math.sign(ex - px);
+    const dy = Math.sign(ey - py);
+    h += `<polyline class="ov-trail" points="${pts.map((p) => p.join(',')).join(' ')}"/>`;
+    h += `<circle class="ov-trail-from" cx="${sx}" cy="${sy}" r="1.6"/>`;
+    // 矢じりは到着した駒の縁に置く（駒の下に隠れないように）
+    h += `<polygon class="ov-trail-head" points="${arrowHead(ex - dx * 6.4, ey - dy * 6.4, dx, dy)}"/>`;
+  }
+  return h;
+}
+
+/** 敵を調べているとき: 狙われうる味方の駒に「攻撃に必要な最小 AP」を付ける */
+function threatSVG(game) {
+  const t = game.inspectThreat;
+  if (!t) return '';
+  let h = '';
+  for (const [u, ap] of t.costs) {
+    const c = game.state.pos[u];
+    if (c < 0) continue;
+    const [x, y] = xy(c);
+    const bx = x * 10 + 2;
+    const by = y * 10 + 8;
+    h += `<g class="ov-cost${ap <= t.avg ? ' likely' : ''}"><circle cx="${bx}" cy="${by}" r="2.1"/><text x="${bx}" y="${by + 0.95}" text-anchor="middle">${ap}</text></g>`;
+  }
+  return h;
+}
+
+function previewSVG(game) {
   const s = game.state;
   const pv = game.preview;
-  const ov = $('#overlay');
-  if (!pv) {
-    if (ov.innerHTML) ov.innerHTML = '';
-    return;
-  }
-  const P = (c) => {
-    const [x, y] = xy(c);
-    return [x * 10 + 5, y * 10 + 5];
-  };
+  if (!pv) return '';
   let h = '';
   if (pv.kind === 'move') {
     const pts = [pv.from, ...pv.path].map(P);
@@ -192,7 +233,7 @@ function renderOverlay(game) {
       }
     }
   }
-  ov.innerHTML = h;
+  return h;
 }
 
 function arrowHead(x, y, dx, dy) {
@@ -410,7 +451,7 @@ function infoContent(game) {
   if (game.preview) return { main: game.preview.text, sub: game.preview.sub, cls: 'preview', confirm: !game.busy };
   if (game.busy && game.mode === 'act') return { main: game.actNote || '…', sub: '' };
   if (game.busy && game.mode === 'roll') return { main: 'ダイスを振っています…', sub: '' };
-  if (game.mode === 'cpu') return { main: game.cpuNote || 'CPU の手番です。', sub: game.cpuSub || '' };
+  if (game.mode === 'cpu' && !(game.sel >= 0 && s.pos[game.sel] >= 0)) return { main: game.cpuNote || 'CPU の手番です。', sub: game.cpuSub || '' };
   if (game.mode === 'over') return { main: s.winner === 'draw' ? '引き分けです。' : s.winner === HUMAN ? 'あなたの勝ちです！' : 'CPU の勝ちです。', sub: '「もう一度遊ぶ」で新しいゲームを始めます。盤面はそのまま確認できます。' };
   if (game.sel >= 0 && s.pos[game.sel] >= 0) {
     const own = cfg.unitSide[game.sel] === HUMAN;
@@ -421,10 +462,20 @@ function infoContent(game) {
       else if (moves.size) sub = '青いマスをタップで移動先をプレビュー（数字は消費 AP）。';
       else if (targets.size) sub = '赤い鉤形の敵をタップで攻撃をプレビュー。';
       else sub = moveBlockReason(s, game.sel);
-    } else if (!own) sub = '敵の駒です。';
+    } else if (!own) sub = threatText(game);
     return { main: unitLine(s, game.sel), sub };
   }
   return { main: game.hint || '', sub: game.hintSub || '' };
+}
+
+/** 調べている敵の脅威の説明（可能性であって、確定した攻撃ではないことを明記する） */
+function threatText(game) {
+  const t = game.inspectThreat;
+  if (!t) return '敵の駒です。';
+  const list = [...t.costs].sort((a, b) => a[1] - b[1]).map(([u, ap]) => `${unitName(cfg, u)} ${ap}AP`);
+  const head = `次の CPU のターンに最大 ${t.max}AP 出た場合の可能性`;
+  if (!list.length) return `${head}：狙える味方はいません（橙の点 = 動けるマス）`;
+  return `${head}：<b>${list.join('・')}</b>（数字 = 最小 AP。橙の点 = 動けるマス）`;
 }
 
 /** この駒が今行動できない理由（コアの判定文をそのまま使う） */
@@ -478,6 +529,9 @@ function renderRules() {
       <li><span class="legend" style="background:#c5ddf2;box-shadow:inset 0 0 0 2px #2f6fd0"></span>青いマス = 移動できる（数字は消費 AP）</li>
       <li><span class="legend" style="background:#f2c8bb;box-shadow:inset 0 0 0 2px #c8321f"></span>赤い鉤形 = 攻撃できる敵</li>
       <li><span class="legend" style="background:#e7dcc2;box-shadow:inset 0 0 0 2px #f1c232"></span>金の枠 = 選択中の駒</li>
+      <li><span class="legend" style="background:#e7dcc2;box-shadow:inset 0 0 0 2px #46464f"></span>灰色の鉤形（移動のプレビュー中）= 射線は通るが AP が足りない敵</li>
+      <li><span class="legend" style="background:#f1c7b0"></span>橙の点（敵を調べているとき）= その敵が攻撃の前に動けるマス。味方の駒の左下の数字 = その味方を狙うのに必要な最小 AP（最大 AP が出た場合の可能性）</li>
+      <li><span class="legend" style="background:transparent;border-top:2px dashed #ff7a2e;height:0;margin-bottom:4px"></span>橙の点線 = CPU が直前のターンに動かした経路</li>
       <li><span class="legend" style="background:#3a322b"></span>格子の黒い石板 = 岩（通れない。弓の射線を遮る）</li>
       <li>駒の下の目盛り = HP。左上の印: <b>!</b> 今攻撃できる / <b>➜</b> 移動済み / <b>✓</b> 行動済み。右上の数字 = 同じ職業の 1・2。</li>
       <li>円い台座 = 人間族（あなた）、八角形の台座 = モンスター族（CPU）。盤の四隅の花形（ロゼット）は飾りで、ゲーム上の効果はない。</li>
@@ -504,8 +558,25 @@ export function showResult(game) {
     title.className = 'result-title';
     $('#result-sub').textContent = `${cfg.rules.maxRounds} ラウンドが終了しました`;
   }
+  $('#result-stats').innerHTML = statsHTML(game.stats);
   $('#result').hidden = false;
   $('#btn-again').focus();
+}
+
+/** 終了時の統計（あなた / CPU） */
+function statsHTML(st) {
+  if (!st) return '';
+  const avg = (x) => (x.turns ? (x.apSum / x.turns).toFixed(1) : '–');
+  const rows = [
+    ['ターン数', (x) => x.turns],
+    ['平均 AP', avg],
+    ['最大 AP', (x) => x.apMax],
+    ['使った AP', (x) => x.apUsed],
+    ['攻撃（命中）', (x) => x.attacks],
+    ['撃破', (x) => x.kills],
+    ['押し出し', (x) => x.pushes],
+  ];
+  return `<thead><tr><th></th><th class="h">あなた</th><th class="m">CPU</th></tr></thead><tbody>${rows.map(([k, f]) => `<tr><td>${k}</td><td>${f(st[HUMAN])}</td><td>${f(st[MONSTER])}</td></tr>`).join('')}</tbody>`;
 }
 
 export function hideResult() {

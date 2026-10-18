@@ -43,6 +43,9 @@ const game = {
   apFresh: false,
   threat: false, // 敵の射程の表示
   threatSet: new Set(),
+  inspectThreat: null, // 調べている敵の脅威 {unit, zone, costs, max, avg}
+  trails: [], // CPU が直前のターンに動かした経路（あなたがダイスを振るまで残す）
+  stats: null, // 終了時の統計（陣営ごと）
   hint: '',
   hintSub: '',
   id: 0, // ゲームの番号（新しいゲームで古い CPU の処理を止める）
@@ -66,7 +69,7 @@ function newGame() {
   const first = v === 'cpu' ? MONSTER : v === 'random' ? (Math.random() < 0.5 ? HUMAN : MONSTER) : HUMAN;
   game.id++;
   game.state = R.createGame(cfg, { firstSide: first });
-  Object.assign(game, { sel: -1, preview: null, busy: false, acting: -1, undo: [], log: [], notice: null, msg: null, cpuNote: '', cpuSub: '', cpuThinking: false, endArmed: false, diceAnimating: false, apFresh: false });
+  Object.assign(game, { sel: -1, preview: null, busy: false, acting: -1, undo: [], log: [], notice: null, msg: null, cpuNote: '', cpuSub: '', cpuThinking: false, endArmed: false, diceAnimating: false, apFresh: false, trails: [], stats: [newStats(), newStats()] });
   disarmNew();
   log('sys', `新しいゲーム（先手: ${first === HUMAN ? 'あなた' : 'CPU'}）`);
   next();
@@ -92,7 +95,7 @@ async function humanRoll() {
   render();
   await FX.rollDice(dice, ns.diceMax, 1);
   if (id !== game.id) return;
-  Object.assign(game, { busy: false, diceAnimating: false, state: ns, apFresh: true, mode: 'act' });
+  Object.assign(game, { busy: false, diceAnimating: false, state: ns, apFresh: true, mode: 'act', trails: [] });
   clearNoticeFor(HUMAN);
   logTurnStart();
   if (ns.apGained >= 8) V.toast(`<span class="big">${ns.apGained} AP</span>大きく攻められるターン！`, 'h', 1800);
@@ -169,6 +172,7 @@ function endHumanTurn() {
   if (game.mode !== 'act' || game.busy) return;
   disarmEnd();
   const left = game.state.ap;
+  countUsedAP(game.state);
   game.state = R.endTurn(game.state);
   Object.assign(game, { sel: -1, preview: null, undo: [], msg: null, apFresh: false });
   log('sys', `あなたのターン終了${left > 0 ? `（未使用 ${left}AP）` : ''}`);
@@ -178,7 +182,7 @@ function endHumanTurn() {
 async function cpuTurn() {
   const id = game.id;
   const sp = SPEED[settings.speed] || SPEED.normal;
-  Object.assign(game, { mode: 'cpu', sel: -1, preview: null, acting: -1, msg: null, cpuNote: 'CPU の手番です。', cpuSub: '', busy: false, apFresh: false });
+  Object.assign(game, { mode: 'cpu', sel: -1, preview: null, acting: -1, msg: null, cpuNote: 'CPU の手番です。', cpuSub: '', busy: false, apFresh: false, trails: [] });
   render();
   await FX.sleep(sp.start);
   if (id !== game.id) return;
@@ -202,10 +206,13 @@ async function cpuTurn() {
   if (rest > 0) await FX.sleep(rest);
   if (id !== game.id) return;
   game.cpuThinking = false;
-  if (plan.actions.length === 0) game.cpuSub = 'CPU は動かずにターンを終えます。';
+  const intent = cpuIntent(plan);
+  if (intent) log('m', intent);
+  game.cpuSub = plan.actions.length === 0 ? 'CPU は動かずにターンを終えます。' : intent;
+  render();
   for (const a of plan.actions) {
     const s = game.state;
-    Object.assign(game, { acting: a.unit, cpuNote: describeAction(s, a), cpuSub: '', apFresh: false });
+    Object.assign(game, { acting: a.unit, sel: -1, msg: null, cpuNote: describeAction(s, a), cpuSub: intent, apFresh: false });
     render();
     await FX.sleep(sp.gap * 0.6);
     if (id !== game.id) return;
@@ -216,7 +223,8 @@ async function cpuTurn() {
     if (id !== game.id) return;
     game.busy = false;
     game.state = r.state;
-    game.cpuSub = `CPU の残り ${r.state.ap}AP`;
+    for (const e of r.events) if (e.type === 'move') game.trails.push([e.from, ...e.path]);
+    game.cpuSub = `CPU の残り ${r.state.ap}AP${intent ? '　' + intent : ''}`;
     announceDiceUp(s, r.state, r.events);
     render();
     if (game.state.phase === 'over') {
@@ -230,9 +238,22 @@ async function cpuTurn() {
   }
   game.acting = -1;
   const left = game.state.ap;
+  countUsedAP(game.state);
   game.state = R.endTurn(game.state);
   log('sys', `CPU のターン終了${left > 0 ? `（未使用 ${left}AP）` : ''}`);
   next();
+}
+
+/**
+ * CPU の狙い（これから実行する行動列の要約）。予言ではなく、直後に再生する行動を先に短く伝えるだけ。
+ * requestPlan の info には狙いの情報がないため、行動列の攻撃対象から作る。
+ */
+function cpuIntent(plan) {
+  if (plan.info && plan.info.reason === 'win') return 'CPU の狙い：あなたのリーダー！';
+  const targets = [...new Set(plan.actions.filter((a) => a.type === 'attack').map((a) => a.target))];
+  if (targets.length) return `CPU の狙い：あなたの${targets.map(N).join('・')}`;
+  if (plan.actions.length) return 'CPU の狙い：位置取り（このターンは攻撃しない）';
+  return '';
 }
 
 /** 行動の短い説明（演出中の情報行に出す） */
@@ -250,6 +271,7 @@ function finish() {
   const s = game.state;
   const id = game.id;
   disarmEnd();
+  countUsedAP(s);
   Object.assign(game, { mode: 'over', sel: -1, preview: null, busy: false, acting: -1, msg: null });
   log('sys', s.winner === 'draw' ? '引き分け' : s.winner === HUMAN ? 'あなたの勝ち' : 'CPU の勝ち');
   render();
@@ -308,15 +330,36 @@ function log(cls, text) {
   game.log.push({ cls, text });
 }
 
+// ---------------------------------------------------------------------------
+// 終了時の統計（コアの events と AP から数えるだけ）
+// ---------------------------------------------------------------------------
+
+function newStats() {
+  return { turns: 0, apSum: 0, apMax: 0, apUsed: 0, attacks: 0, kills: 0, pushes: 0 };
+}
+
+/** ターンの終わり（またはゲーム終了時）に、そのターンに使った AP を数える */
+function countUsedAP(s) {
+  if (game.stats && s.apGained > 0) game.stats[s.side].apUsed += Math.max(0, s.apGained - s.ap);
+}
+
 function logTurnStart() {
   const s = game.state;
+  const st = game.stats[s.side];
+  st.turns++;
+  st.apSum += s.ap;
+  st.apMax = Math.max(st.apMax, s.ap);
   const who = s.side === HUMAN ? 'あなた' : 'CPU';
   log(`turn ${s.side === HUMAN ? 'h' : 'm'}`, `ROUND ${R.roundOf(s)} ${who}: ${s.ap}AP（${s.dice.join('+')}+基本1、ダイス強化▲${R.diceStageOf(s)}）`);
 }
 
 function logEvents(events, side) {
   const cls = side === HUMAN ? 'h' : 'm';
+  const st = game.stats[side];
   for (const e of events) {
+    if (e.type === 'attack') st.attacks++;
+    else if (e.type === 'kill') st.kills++;
+    else if (e.type === 'knockback') st.pushes++;
     if (e.type === 'move') log(cls, `${N(e.unit)} ${C(e.from)}→${C(e.to)}（${e.cost}AP）`);
     else if (e.type === 'attack') log(cls, `${N(e.unit)} → ${N(e.target)} に攻撃（${e.cost}AP${e.overObstacle ? '・岩越し' : ''}）`);
     else if (e.type === 'damage' && e.hp > 0) log(cls, `　└ ${N(e.unit)} 残りHP ${e.hp}`);
@@ -335,10 +378,18 @@ function movePreview(m) {
   const u = game.sel;
   const T = cfg.types[cfg.unitType[u]];
   const left = s.ap - m.cost;
+  const total = m.cost + T.attackCost;
   const canAttackAfter = !(s.flags[u] & ATTACKED) && left >= T.attackCost;
-  // 移動後に狙える敵（コアの attackTargetsFrom は u の現在マスを空きとして扱う）
-  const after = canAttackAfter ? R.attackTargetsFrom(s, u, m.cell, R.occupancy(s)).map((t) => t.target) : [];
-  let sub = after.length ? `移動後に攻撃できる：<b>${after.map(N).join('・')}</b>` : canAttackAfter ? '移動後に攻撃できる敵はいません' : `移動後は攻撃の AP（${T.attackCost}）が足りません`;
+  // 移動先から射線が通る敵（コアの attackTargetsFrom は u の現在マスを空きとして扱う）。AP が足りなくても候補は示す
+  const reach = s.flags[u] & ATTACKED ? [] : R.attackTargetsFrom(s, u, m.cell, R.occupancy(s)).map((t) => t.target);
+  const after = canAttackAfter ? reach : [];
+  const short = canAttackAfter ? [] : reach;
+  const names = (list) => list.map((t) => N(t) + (s.hp[t] <= 1 ? '<span class="em-kill">（撃破可）</span>' : '')).join('・');
+  const sum = `移動${m.cost}＋攻撃${T.attackCost}＝<b>計${total}AP</b>`;
+  let sub;
+  if (after.length) sub = `移動後に狙える：<b>${names(after)}</b>　${sum}`;
+  else if (short.length) sub = `<span class="em-warn">AP 不足</span>：${names(short)} を狙うには ${sum}（今は ${s.ap}AP）`;
+  else sub = '移動先から狙える敵はいません';
   if (game.threat) {
     const hs = R.applyAction(s, { type: 'move', unit: u, to: m.cell }).state;
     if (threatened(hs, HUMAN).has(u)) sub += '　<span class="em-warn">⚠ 移動先は敵の射程内</span>';
@@ -349,6 +400,7 @@ function movePreview(m) {
     from: s.pos[u],
     path: m.path,
     after,
+    short,
     action: { type: 'move', unit: u, to: m.cell },
     text: `${N(u)} → ${C(m.cell)} へ移動 <b>${m.cost}AP</b>（残り${left}）`,
     sub: sub + '　<span class="hint-tap">再タップで確定</span>',
@@ -400,8 +452,15 @@ function onCell(c) {
   const s = game.state;
   if (!s || game.busy) return;
   const u = R.unitAt(s, c);
+  const prevInspect = game.msg ? game.msg.inspect : -1;
   game.msg = null;
   const mine = game.mode === 'act' && game.sel >= 0 && cfg.unitSide[game.sel] === HUMAN;
+  // 攻撃できない敵をもう一度タップしたら、その敵を調べる（脅威の表示）
+  if (mine && u >= 0 && u === prevInspect) {
+    game.preview = null;
+    game.sel = u;
+    return render();
+  }
   if (mine) {
     const pv = game.preview;
     // 同じ対象をもう一度タップ → 確定
@@ -420,7 +479,7 @@ function onCell(c) {
       }
       // 攻撃できない理由（コアの判定文）
       game.preview = null;
-      return setMsg(R.validateAction(s, { type: 'attack', unit: game.sel, target: u }) || '攻撃できません', 'error', u);
+      return setMsg((R.validateAction(s, { type: 'attack', unit: game.sel, target: u }) || '攻撃できません') + '（もう一度タップでこの敵を調べる）', 'error', u);
     }
     if (u < 0) {
       if (pv) {
@@ -505,18 +564,50 @@ function threatened(s, side) {
   if (s.phase === 'over') return out;
   const enemy = side ^ 1;
   const budget = threatBudget(s, enemy);
+  for (const e of cfg.sideUnits[enemy]) for (const t of attackCosts(s, e, budget).costs.keys()) out.add(t);
+  return out;
+}
+
+/**
+ * 駒 e が次のターンに、移動してから攻撃する場合に必要な最小 AP（相手の駒ごと）と、攻撃前に移動しうるマス。
+ * ほかの駒は今の位置のまま動かないと仮定した「可能性」で、コアの reachable / attackTargetsFrom だけで求める。
+ */
+function attackCosts(s, e, budget) {
+  const costs = new Map();
+  const zone = new Set();
+  const T = cfg.types[cfg.unitType[e]];
+  if (s.pos[e] < 0 || budget < T.attackCost) return { costs, zone };
   const occ = R.occupancy(s);
-  for (const e of cfg.sideUnits[enemy]) {
-    if (s.pos[e] < 0) continue;
-    const T = cfg.types[cfg.unitType[e]];
-    if (budget < T.attackCost) continue;
-    const { dist } = R.reachable(s, e, budget - T.attackCost);
-    for (let c = 0; c < cfg.CELLS; c++) {
-      if (dist[c] < 0) continue;
-      for (const t of R.attackTargetsFrom(s, e, c, occ)) if (cfg.unitSide[t.target] === side) out.add(t.target);
+  const { dist } = R.reachable(s, e, budget - T.attackCost);
+  for (let c = 0; c < cfg.CELLS; c++) {
+    if (dist[c] < 0) continue;
+    zone.add(c);
+    const cost = dist[c] * cfg.rules.moveCost + T.attackCost;
+    for (const t of R.attackTargetsFrom(s, e, c, occ)) {
+      if (cfg.unitSide[t.target] === cfg.unitSide[e]) continue;
+      if (!costs.has(t.target) || costs.get(t.target) > cost) costs.set(t.target, cost);
     }
   }
-  return out;
+  return { costs, zone };
+}
+
+/** 調べている敵の脅威（次のターンの最大 AP での可能性） */
+function inspectThreat(s, u) {
+  if (u < 0 || s.pos[u] < 0 || cfg.unitSide[u] !== MONSTER || s.phase === 'over') return null;
+  const max = maxAP(s.lost[MONSTER]);
+  const { costs, zone } = attackCosts(s, u, max);
+  return { unit: u, zone, costs, max, avg: threatBudget(s, MONSTER) };
+}
+
+/** 自軍リーダーを、どれかの敵が攻撃しうる最小 AP（いなければ null） */
+function leaderDanger(s) {
+  const L = cfg.leaderOf[HUMAN];
+  let best = null;
+  for (const e of cfg.sideUnits[MONSTER]) {
+    const c = attackCosts(s, e, maxAP(s.lost[MONSTER])).costs.get(L);
+    if (c !== undefined && (best === null || c < best)) best = c;
+  }
+  return best;
 }
 // 平均 AP の小数部は切り捨てる（4.0 が浮動小数点の誤差で 3.999… にならないよう微小値を足す）
 const threatBudget = (s, side) => Math.floor(meanAP(apDistribution(s.lost[side])) + 1e-9);
@@ -549,7 +640,10 @@ function computeHints() {
   }
   if (game.threat && (game.mode === 'roll' || game.mode === 'act')) {
     const n = game.threatSet.size;
-    sub = `<span class="em-warn">敵の射程：狙われる味方 ${n} 体</span>（CPU の平均 ${threatBudget(s, MONSTER)}AP）` + (sub ? '　' + sub : '');
+    const ld = leaderDanger(s);
+    sub =
+      `<span class="em-warn">敵の射程：狙われる味方 ${n} 体</span>（CPU の平均 ${threatBudget(s, MONSTER)}AP）・王を狙える最小 ${ld === null ? `—（最大 ${maxAP(s.lost[MONSTER])}AP でも届かない）` : `${ld}AP`}` +
+      (sub ? '　' + sub : '');
   }
   game.hint = hint;
   game.hintSub = sub;
@@ -558,6 +652,7 @@ function computeHints() {
 
 function render() {
   game.threatSet = game.threat && game.state ? threatened(game.state, HUMAN) : new Set();
+  game.inspectThreat = game.state && !game.preview ? inspectThreat(game.state, game.msg && game.msg.inspect >= 0 ? -1 : game.sel) : null;
   computeHints();
   V.render(game);
 }
