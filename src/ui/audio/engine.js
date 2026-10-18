@@ -52,6 +52,8 @@ export function onUnlock(fn) {
  */
 export function unlock() {
   if (failed) return;
+  // iPhone: AudioContext を作る前に「メディアとして再生する」と伝える（消音モードでも鳴らすため）
+  if (wantsRunning()) iosPlayback(true);
   if (!ctx) {
     try {
       build();
@@ -77,12 +79,81 @@ function syncRunning() {
   clearTimeout(suspendTimer);
   if (!ctx || ctx.state === 'closed' || !unlocked || document.hidden) return;
   if (wantsRunning()) {
+    iosPlayback(true);
     if (ctx.state !== 'running') resume();
     return;
   }
   suspendTimer = setTimeout(() => {
-    if (ctx.state === 'running' && !wantsRunning() && !document.hidden) Promise.resolve(ctx.suspend()).catch(() => {});
+    if (ctx.state === 'running' && !wantsRunning() && !document.hidden) {
+      Promise.resolve(ctx.suspend()).catch(() => {});
+      iosPlayback(false);
+    }
   }, 1200);
+}
+
+// ---------------------------------------------------------------------------
+// iPhone の消音モード対策
+// iPhone のブラウザ（Safari と、同じエンジンの Chrome など）では、Web Audio の音は着信音と同じ扱いで、
+// 消音モード（側面のスイッチ・アクションボタン）だと鳴らない。次のどちらかで「メディアの再生」に切り替える。
+//  - iOS 17 以降: navigator.audioSession.type = 'playback'
+//  - それより前: 無音の音声（<audio>）をユーザー操作の中で再生し続ける（よく知られた回避策）
+// メディア扱いになるので、ほかのアプリで再生中の音楽は止まることがある。背景タブ・消音中・音がすべてオフのときは元に戻す。
+// ---------------------------------------------------------------------------
+
+const isIOS = typeof navigator !== 'undefined' && (/iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+let silentEl = null;
+
+function iosPlayback(on) {
+  if (!isIOS) return;
+  try {
+    if (navigator.audioSession) {
+      navigator.audioSession.type = on ? 'playback' : 'auto';
+      return;
+    }
+  } catch {
+    // audioSession を設定できない場合は、無音の音声で切り替える
+  }
+  try {
+    if (on) {
+      if (!silentEl) {
+        silentEl = new Audio(silentWavUrl());
+        silentEl.loop = true;
+        silentEl.preload = 'auto';
+        silentEl.setAttribute('playsinline', '');
+        silentEl.setAttribute('x-webkit-airplay', 'deny');
+      }
+      // ユーザー操作の外（タブの切り替えなど）では拒否されるが、次のタップでやり直す
+      if (silentEl.paused) Promise.resolve(silentEl.play()).catch(() => {});
+    } else if (silentEl && !silentEl.paused) silentEl.pause();
+  } catch {
+    // 無音の音声が使えなくても、ゲームと（消音モードでなければ）音は動く
+  }
+}
+
+/** 0.5 秒の無音の WAV（完全な 0 だと省かれることがあるので、聞こえない ±1 の揺れを入れる） */
+export function silentWavUrl() {
+  const sr = 8000;
+  const n = 4000;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const str = (o, s) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+  };
+  str(0, 'RIFF');
+  v.setUint32(4, 36 + n * 2, true);
+  str(8, 'WAVE');
+  str(12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); // PCM
+  v.setUint16(22, 1, true); // モノラル
+  v.setUint32(24, sr, true);
+  v.setUint32(28, sr * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  str(36, 'data');
+  v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, i % 2 ? 1 : -1, true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
 }
 
 function resume() {
@@ -136,6 +207,7 @@ function build() {
     if (document.hidden) {
       clearTimeout(suspendTimer);
       Promise.resolve(ctx.suspend()).catch(() => {});
+      iosPlayback(false);
     } else syncRunning();
   });
 }
