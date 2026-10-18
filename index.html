@@ -2,98 +2,137 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1428" />
     <title>DICE TACTICS</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <header class="topbar">
-      <h1>DICE TACTICS</h1>
-      <div class="topbar-actions">
-        <label class="first-select">
-          先手
-          <select id="first">
+    <div class="app" id="app">
+      <main class="stage" id="stage">
+        <!-- 両陣営の状態とラウンド -->
+        <header class="status" aria-label="対局の状態">
+          <div class="side-stat m" id="stat-m"></div>
+          <div class="round-box">
+            <div class="game-title">DICE TACTICS</div>
+            <div id="round" class="round"></div>
+            <div id="turn" class="turn"></div>
+          </div>
+          <div class="side-stat h" id="stat-h"></div>
+        </header>
+
+        <!-- 盤面 -->
+        <div class="frame" id="frame">
+          <div class="frame-band">
+            <div class="frame-inner">
+              <div class="coords cols" aria-hidden="true"></div>
+              <div class="coords rows" aria-hidden="true"></div>
+              <div class="board" id="board" role="grid" aria-label="10×10 の盤面">
+                <div class="cells" id="cells"></div>
+                <svg class="overlay" id="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+                <div class="pieces" id="pieces" aria-hidden="true"></div>
+                <div class="fx" id="fx" aria-hidden="true"></div>
+              </div>
+            </div>
+          </div>
+          <div class="corner tl"></div>
+          <div class="corner tr"></div>
+          <div class="corner bl"></div>
+          <div class="corner br"></div>
+          <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+        </div>
+      </main>
+
+      <!-- 選択中の駒・行動案・短い通知 -->
+      <section class="info" id="info" aria-live="polite">
+        <div class="info-text">
+          <div id="info-main" class="info-main"></div>
+          <div id="info-sub" class="info-sub"></div>
+        </div>
+        <button id="btn-confirm" class="btn confirm" hidden>確定</button>
+      </section>
+
+      <!-- ダイス・AP・ターン操作 -->
+      <section class="tray" id="tray" aria-label="ダイスと AP">
+        <div class="tray-top">
+          <div class="dice-wrap">
+            <div id="dice-owner" class="dice-owner"></div>
+            <div id="dice" class="dice"></div>
+          </div>
+          <div class="ap-box">
+            <div class="ap-head"><span class="ap-label">AP</span><span id="ap-num" class="ap-num"></span><span id="ap-of" class="ap-of"></span></div>
+            <div id="ap-chips" class="ap-chips" aria-hidden="true"></div>
+            <div id="ap-formula" class="ap-formula"></div>
+          </div>
+        </div>
+        <div class="tray-buttons">
+          <button id="btn-undo" class="btn ghost undo" aria-keyshortcuts="Z">戻す</button>
+          <button id="btn-main" class="btn primary main"></button>
+        </div>
+      </section>
+
+      <!-- 補助情報 -->
+      <nav class="aux" aria-label="補助メニュー">
+        <button class="aux-btn" data-sheet="log"><span class="aux-ico">≡</span>履歴</button>
+        <button class="aux-btn" id="btn-threat" aria-pressed="false"><span class="aux-ico">◎</span>敵の射程</button>
+        <button class="aux-btn" data-sheet="rules"><span class="aux-ico">?</span>ルール</button>
+        <button class="aux-btn" data-sheet="settings"><span class="aux-ico">⚙</span>設定</button>
+      </nav>
+    </div>
+
+    <!-- 下から開くシート -->
+    <div class="sheet-back" id="sheet-back" hidden></div>
+    <section class="sheet" id="sheet-log" role="dialog" aria-label="行動履歴" hidden>
+      <div class="sheet-head"><h2>行動履歴</h2><button class="btn ghost sheet-close">閉じる</button></div>
+      <ol id="log" class="log"></ol>
+    </section>
+
+    <section class="sheet" id="sheet-rules" role="dialog" aria-label="ルール" hidden>
+      <div class="sheet-head"><h2>ルール</h2><button class="btn ghost sheet-close">閉じる</button></div>
+      <div class="sheet-body rules" id="rules-body"></div>
+    </section>
+
+    <section class="sheet" id="sheet-settings" role="dialog" aria-label="設定" hidden>
+      <div class="sheet-head"><h2>設定</h2><button class="btn ghost sheet-close">閉じる</button></div>
+      <div class="sheet-body settings">
+        <label class="row">
+          <span>先手</span>
+          <select id="set-first">
             <option value="human">あなた</option>
             <option value="cpu">CPU</option>
             <option value="random">ランダム</option>
           </select>
         </label>
-        <button id="btn-new" class="btn">新しいゲーム</button>
+        <div class="row">
+          <span>CPU の再生速度</span>
+          <div class="seg" id="set-speed" role="radiogroup" aria-label="CPU の再生速度">
+            <button data-v="slow" role="radio">ゆっくり</button>
+            <button data-v="normal" role="radio">標準</button>
+            <button data-v="fast" role="radio">速い</button>
+          </div>
+        </div>
+        <label class="row check">
+          <input type="checkbox" id="set-quick" />
+          <span>移動は 1 タップで確定する（攻撃は常にプレビューしてから確定）</span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-calm" />
+          <span>演出を控えめにする</span>
+        </label>
+        <button id="btn-new" class="btn primary wide">新しいゲーム</button>
+        <p class="note">キー操作: Space = ダイスを振る / Enter = 確定 / E = ターン終了 / Z = 移動を戻す / 1〜6 = 自軍の駒を選ぶ / Esc = 取り消し</p>
       </div>
-    </header>
+    </section>
 
-    <main class="layout">
-      <section class="board-area">
-        <div class="side-label monster">モンスター族（CPU）</div>
-        <div id="board" class="board" aria-label="10×10 の盤面"></div>
-        <div class="side-label human">人間族（あなた）</div>
-      </section>
-
-      <aside class="panel">
-        <div class="card status">
-          <span id="round" class="round"></span>
-          <span id="turn" class="turn"></span>
-        </div>
-
-        <div class="card dice-card">
-          <div class="dice-row">
-            <div id="dice" class="dice"></div>
-            <div id="ap-formula" class="ap-formula"></div>
-          </div>
-          <div class="ap-row">
-            <span class="ap-label">AP</span>
-            <div id="ap-bar" class="ap-bar"></div>
-            <span id="ap-text" class="ap-text"></span>
-          </div>
-          <div class="buttons">
-            <button id="btn-roll" class="btn primary">ダイスを振る <kbd>Space</kbd></button>
-            <button id="btn-undo" class="btn">移動を戻す <kbd>Z</kbd></button>
-            <button id="btn-end" class="btn">ターン終了 <kbd>E</kbd></button>
-          </div>
-          <div id="stages" class="stages"></div>
-          <div id="notice" class="notice" hidden></div>
-        </div>
-
-        <div class="card">
-          <div id="message" class="message"></div>
-          <div id="unit-info" class="unit-info"></div>
-        </div>
-
-        <div class="card log-card">
-          <h2>行動履歴</h2>
-          <ol id="log" class="log"></ol>
-        </div>
-
-        <details class="card rules">
-          <summary>ルール</summary>
-          <ul>
-            <li><b>勝利条件</b>: 相手のリーダーを撃破する。40 ラウンドで引き分け。</li>
-            <li><b>AP</b>: 毎ターン「基本 1 ＋ ダイス 3 個」。各ダイスは 0〜2（1〜7AP）。<b>リーダー以外の味方を失うたびに、ダイスが 1 個ずつ 0〜3 に強化</b>される（3 体で最大 1〜10AP）。強化は次のターンから。AP は持ち越さない。</li>
-            <li><b>移動</b>: 上下左右 1 マス＝1AP。岩・ユニットは通れない。各ユニット 1 ターンに移動 1 回・攻撃 1 回（移動 → 攻撃は可、攻撃 → 移動は不可）。</li>
-            <li><b>攻撃</b>: 上下左右の直線のみ。1 ダメージ。途中のユニットは射線を遮る。</li>
-          </ul>
-          <table>
-            <thead>
-              <tr><th>ユニット</th><th>HP</th><th>射程</th><th>攻撃</th><th>特徴</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>王 リーダー</td><td>4</td><td>隣接</td><td>1AP</td><td>倒されると敗北</td></tr>
-              <tr><td>戦 戦士 ×2</td><td>3</td><td>隣接</td><td>1AP</td><td></td></tr>
-              <tr><td>弓 弓使い ×2</td><td>2</td><td>2〜4</td><td>2AP</td><td>命中した敵を 1 マス押し出す。岩で射線が遮られる</td></tr>
-              <tr><td>魔 魔法使い</td><td>2</td><td>1〜2</td><td>2AP</td><td>岩を越えて攻撃できる</td></tr>
-            </tbody>
-          </table>
-        </details>
-      </aside>
-    </main>
-
+    <!-- 結果 -->
     <div id="result" class="result" hidden>
-      <div class="result-box">
+      <div class="result-box" role="dialog" aria-labelledby="result-title">
+        <div class="result-orn" id="result-orn"></div>
         <div id="result-title" class="result-title"></div>
         <div id="result-sub" class="result-sub"></div>
-        <div class="buttons">
+        <div class="result-buttons">
           <button id="btn-again" class="btn primary">もう一度</button>
-          <button id="btn-close" class="btn">盤面を見る</button>
+          <button id="btn-close" class="btn ghost">盤面を見る</button>
         </div>
       </div>
     </div>
