@@ -74,8 +74,9 @@
       <!-- 補助情報 -->
       <nav class="aux" aria-label="補助メニュー">
         <button class="aux-btn" data-sheet="log"><span class="aux-ico">≡</span>履歴</button>
-        <button class="aux-btn" id="btn-threat" aria-pressed="false"><span class="aux-ico">◎</span>敵の射程</button>
+        <button class="aux-btn" id="btn-threat" aria-pressed="false"><span class="aux-ico">◎</span>射程</button>
         <button class="aux-btn" data-sheet="rules"><span class="aux-ico">?</span>ルール</button>
+        <button class="aux-btn" id="btn-mute" aria-pressed="false" title="すべての音を消す"><span class="aux-ico" aria-hidden="true">♪</span><span class="aux-label">消音</span></button>
         <button class="aux-btn" data-sheet="settings"><span class="aux-ico">⚙</span>設定</button>
       </nav>
     </div>
@@ -119,6 +120,15 @@
           <input type="checkbox" id="set-calm" />
           <span>演出を控えめにする</span>
         </label>
+        <div class="row audio">
+          <label class="check"><input type="checkbox" id="set-sfx" /><span>効果音</span></label>
+          <input type="range" id="set-sfx-vol" min="0" max="100" step="5" aria-label="効果音の音量" />
+        </div>
+        <div class="row audio">
+          <label class="check"><input type="checkbox" id="set-bgm" /><span>BGM</span></label>
+          <input type="range" id="set-bgm-vol" min="0" max="100" step="5" aria-label="BGM の音量" />
+        </div>
+        <p class="note">BGM は最初にオンにしたとき、曲の準備に数秒かかります。音は最初に画面をタップしたあとに鳴ります。</p>
         <button id="btn-new" class="btn primary wide">新しいゲーム</button>
         <p class="note">キー操作: Space = ダイスを振る / Enter = 確定 / E = ターン終了 / Z = 移動を戻す / 1〜6 = 自軍の駒を選ぶ / Esc = 取り消し</p>
       </div>

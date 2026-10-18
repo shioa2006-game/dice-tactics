@@ -1,9 +1,11 @@
 // DICE TACTICS — 演出
 // コアの applyAction() が返す events を順に見せるだけ。状態はここで計算し直さない。
 // 時間待ちには必ず setTimeout の上限を付け、背景タブや描画停止でも進行が止まらないようにする。
+// 効果音（audio/sfx.js）も同じ events の同じ瞬間に鳴らす。動きを省くとき（still）も音は鳴らす。
 
 import { ARCHER, MAGE, DIRS } from '../core/config.js';
 import * as V from './view.js';
+import * as S from './audio/sfx.js';
 
 const REASON = { edge: '盤の端', obstacle: '岩', unit: '駒' };
 const reducedMQ = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
@@ -54,8 +56,12 @@ function fadeOut(el, delay, ms = 300) {
   }, delay * factor);
 }
 
+let gen = 0; // 打ち切りの世代（新しいゲームで増やし、古い演出の続き・効果音を止める）
+
 /** 新しいゲームなどで、再生中の演出をすべて打ち切る */
 export function cancelAll() {
+  gen++;
+  sound(() => S.silenceAll());
   for (const a of running) a.cancel();
   running.clear();
   const layer = V.fxLayer();
@@ -84,9 +90,11 @@ function safe(fn) {
 /** events（applyAction の戻り値）を順に再生する */
 export const playEvents = safe(async (events, { speed = 1 } = {}) => {
   factor = speed;
+  const my = gen;
   let attack = null;
   const tails = []; // 最後まで待つ演出（近接攻撃の戻りなど）
   for (const e of events) {
+    if (my !== gen) return; // 途中で新しいゲームになった
     if (e.type === 'move') await move(e);
     else if (e.type === 'attack') {
       attack = e;
@@ -100,16 +108,29 @@ export const playEvents = safe(async (events, { speed = 1 } = {}) => {
   await Promise.all(tails);
 });
 
+/** 効果音を鳴らす（音の失敗で演出・進行を止めない） */
+function sound(fn) {
+  try {
+    fn();
+  } catch (err) {
+    console.error('効果音を省略しました:', err);
+  }
+}
+const sideOf = (u) => cfg.unitSide[u];
+const secs = (ms) => (still() ? 0.06 : (ms * factor) / 1000);
+
 async function move(e) {
   const el = V.pieceEl(e.unit);
   el.style.transform = V.cellTransform(e.to);
+  const ms = Math.min(600, 140 + 90 * e.path.length);
+  sound(() => S.move(e.path.length, secs(ms) / e.path.length, sideOf(e.unit)));
   if (still()) return;
   for (const c of e.path.slice(0, -1)) fadeOut(fxEl('fx-dot', V.cellTransform(c)), 260, 420);
   el.classList.add('lifted');
   await play(
     el,
     [e.from, ...e.path].map((c) => ({ transform: V.cellTransform(c) })),
-    Math.min(600, 140 + 90 * e.path.length),
+    ms,
   );
   el.classList.remove('lifted');
 }
@@ -120,12 +141,16 @@ async function strike(e) {
   const [fx, fy] = V.xy(e.from);
   const [tx, ty] = V.xy(e.to);
   if (type === ARCHER) {
+    const ms = 130 + 45 * e.dist;
+    sound(() => S.bow(sideOf(e.unit), secs(ms)));
     const p = fxEl('fx-proj', V.at(fx, fy), arrowSVG(e.dir));
-    await play(p, [{ transform: V.at(fx, fy) }, { transform: V.at(tx, ty) }], 130 + 45 * e.dist, 'cubic-bezier(.4,0,.9,.6)');
+    await play(p, [{ transform: V.at(fx, fy) }, { transform: V.at(tx, ty) }], ms, 'cubic-bezier(.4,0,.9,.6)');
     p.remove();
     return null;
   }
   if (type === MAGE) {
+    const ms = 240 + 50 * e.dist;
+    sound(() => S.magic(sideOf(e.unit), secs(ms), e.overObstacle));
     const o = fxEl('fx-orb', V.at(fx, fy));
     const frames = [{ transform: V.at(fx, fy) + ' scale(.6)' }];
     if (e.overObstacle) {
@@ -134,11 +159,13 @@ async function strike(e) {
       frames.push({ transform: V.at((fx + tx) / 2 + px, (fy + ty) / 2 + py) + ' scale(1.25)', offset: 0.5 });
     }
     frames.push({ transform: V.at(tx, ty) + ' scale(1)' });
-    await play(o, frames, 240 + 50 * e.dist, 'ease-in-out');
+    await play(o, frames, ms, 'ease-in-out');
     o.remove();
     return null;
   }
   // 剣・王: 対象へ踏み込んで戻る
+  const my = gen;
+  sound(() => S.swing(sideOf(e.unit)));
   const el = V.pieceEl(e.unit);
   el.classList.add('lifted');
   const lunge = play(
@@ -152,6 +179,7 @@ async function strike(e) {
     'ease-in-out',
   ).then(() => el.classList.remove('lifted'));
   await wait(120);
+  if (my !== gen) return lunge; // 途中で新しいゲームになった
   // 斬撃: 対象のマスを斜めに走る一筋の光
   const sl = fxEl('fx-slash', V.at(tx, ty));
   play(sl, [{ opacity: 0, clipPath: 'inset(0 100% 0 0)' }, { opacity: 1, clipPath: 'inset(0 0 0 0)', offset: 0.45 }, { opacity: 0, clipPath: 'inset(0 0 0 0)' }], 260, 'ease-out').then(() => sl.remove());
@@ -168,6 +196,8 @@ async function damage(e, attack) {
   const c = attack ? attack.to : -1;
   if (c < 0) return;
   const [x, y] = V.xy(c);
+  const kind = { [ARCHER]: 'arrow', [MAGE]: 'magic' }[cfg.unitType[attack.unit]] || 'melee';
+  sound(() => S.hit(kind, sideOf(attack.unit)));
   V.setHp(e.unit, e.hp, true);
   const b = fxEl('fx-burst' + (e.hp <= 0 ? ' kill' : ''), V.at(x, y));
   play(b, [{ transform: V.at(x, y) + ' scale(.3)', opacity: 1 }, { transform: V.at(x, y) + ' scale(1.35)', opacity: 0 }], 360, 'ease-out').then(() => b.remove());
@@ -198,6 +228,8 @@ async function kill(e) {
   const el = V.pieceEl(e.unit);
   const [x, y] = V.xy(e.at);
   floatText(x, y, '撃破', 'kill');
+  sound(() => S.kill(sideOf(e.unit)));
+  const my = gen;
   el.style.opacity = '0';
   await play(
     el,
@@ -209,18 +241,21 @@ async function kill(e) {
     460,
     'ease-in',
   );
-  el.hidden = true;
+  // 途中で新しいゲームになったら、新しい盤の駒を隠さない
+  if (my === gen) el.hidden = true;
 }
 
 async function knockback(e) {
   const el = V.pieceEl(e.unit);
   el.style.transform = V.cellTransform(e.to);
+  sound(() => S.push(secs(220)));
   await play(el, [{ transform: V.cellTransform(e.from) }, { transform: V.cellTransform(e.to) }], 220, 'cubic-bezier(.2,.9,.3,1)');
 }
 
 async function blocked(e, attack) {
   const [x, y] = V.xy(e.at);
   const [dx, dy] = DIRS[attack.dir];
+  sound(() => S.blocked());
   const mark = fxEl('fx-x', V.at(x + dx * 0.55, y + dy * 0.55), `<div>✕<small>${REASON[e.reason]}</small></div>`);
   fadeOut(mark, 700, 350);
   if (still()) setTimeout(() => mark.remove(), 900);
@@ -246,10 +281,19 @@ export const slide = safe(async (u, from, to, speed = 1) => {
 
 /** ダイスを転がす（出目はすでに決まっている。表示だけを揺らしてから止める） */
 export const rollDice = safe(async (values, maxes, speed = 1) => {
-  if (still()) return;
+  if (still()) {
+    sound(() => S.diceLand(values, maxes));
+    return;
+  }
   const dur = 560 * speed;
+  const my = gen;
+  sound(() => S.diceRoll(dur / 1000));
+  setTimeout(() => {
+    if (my === gen) sound(() => S.diceLand(values, maxes));
+  }, dur);
   const t0 = performance.now();
   while (performance.now() - t0 < dur) {
+    if (my !== gen) return;
     V.showDice(
       maxes.map((m) => Math.floor(Math.random() * (m + 1))),
       maxes,
@@ -257,6 +301,7 @@ export const rollDice = safe(async (values, maxes, speed = 1) => {
     );
     await sleep(70);
   }
+  if (my !== gen) return;
   V.showDice(values, maxes, 'landed');
   await sleep(160 * speed);
 });

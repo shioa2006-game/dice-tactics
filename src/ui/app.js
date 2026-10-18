@@ -8,6 +8,9 @@ import * as R from '../core/rules.js';
 import { requestPlan } from './cpu.js';
 import * as V from './view.js';
 import * as FX from './fx.js';
+import * as AE from './audio/engine.js';
+import * as S from './audio/sfx.js';
+import * as Music from './audio/music.js';
 
 const BLOCK_REASON = { edge: '盤の端', obstacle: '岩', unit: 'ユニット' };
 // CPU の再生速度: anim = 演出の時間の倍率、gap = 行動の間、start = 手番開始からダイスまで
@@ -72,7 +75,22 @@ function newGame() {
   Object.assign(game, { sel: -1, preview: null, busy: false, acting: -1, undo: [], log: [], notice: null, msg: null, cpuNote: '', cpuSub: '', cpuThinking: false, endArmed: false, diceAnimating: false, apFresh: false, trails: [], stats: [newStats(), newStats()] });
   disarmNew();
   log('sys', `新しいゲーム（先手: ${first === HUMAN ? 'あなた' : 'CPU'}）`);
+  snd(() => S.stopStinger(0.3));
+  snd(() => S.newGame());
+  snd(() => Music.restart()); // 設定でオン・消音でなければ曲の頭からかけ直す
   next();
+}
+
+/** BGM を鳴らしてよい局面か（設定でオン・消音でない・決着していない） */
+const bgmWanted = () => AE.settings.bgm && !AE.settings.mute && game.mode !== 'over';
+
+/** 音を鳴らす（音の失敗でゲームの進行を止めない） */
+function snd(fn) {
+  try {
+    fn();
+  } catch (err) {
+    console.error('音を省略しました:', err);
+  }
 }
 
 /** 手番の陣営に応じて、ダイス待ち（あなた）か CPU の手番に進む */
@@ -81,6 +99,7 @@ function next() {
   if (s.phase === 'over') return finish();
   if (s.side === HUMAN) {
     game.mode = 'roll';
+    snd(() => S.turn(HUMAN));
     render();
   } else cpuTurn();
 }
@@ -98,7 +117,10 @@ async function humanRoll() {
   Object.assign(game, { busy: false, diceAnimating: false, state: ns, apFresh: true, mode: 'act', trails: [] });
   clearNoticeFor(HUMAN);
   logTurnStart();
-  if (ns.apGained >= 8) V.toast(`<span class="big">${ns.apGained} AP</span>大きく攻められるターン！`, 'h', 1800);
+  if (ns.apGained >= 8) {
+    V.toast(`<span class="big">${ns.apGained} AP</span>大きく攻められるターン！`, 'h', 1800);
+    snd(() => S.highAP());
+  }
   render();
 }
 
@@ -140,6 +162,7 @@ async function undoMove() {
   disarmEnd();
   Object.assign(game, { preview: null, msg: null, busy: true });
   render();
+  snd(() => S.undo());
   if (u !== undefined) await FX.slide(u, cur.pos[u], prev.pos[u], HUMAN_ANIM);
   if (id !== game.id) return;
   Object.assign(game, { busy: false, state: prev, sel: u !== undefined ? u : game.sel });
@@ -152,6 +175,7 @@ function requestEndTurn() {
   // まだ動ける駒と AP が残っているときは、もう一度押して確定（誤タップ防止）
   if (!game.endArmed && game.state.ap > 0 && game.canAct) {
     game.endArmed = true;
+    snd(() => S.armed());
     clearTimeout(armTimer);
     armTimer = setTimeout(() => {
       game.endArmed = false;
@@ -183,6 +207,7 @@ async function cpuTurn() {
   const id = game.id;
   const sp = SPEED[settings.speed] || SPEED.normal;
   Object.assign(game, { mode: 'cpu', sel: -1, preview: null, acting: -1, msg: null, cpuNote: 'CPU の手番です。', cpuSub: '', busy: false, apFresh: false, trails: [] });
+  snd(() => S.turn(MONSTER));
   render();
   await FX.sleep(sp.start);
   if (id !== game.id) return;
@@ -275,6 +300,7 @@ function finish() {
   Object.assign(game, { mode: 'over', sel: -1, preview: null, busy: false, acting: -1, msg: null });
   log('sys', s.winner === 'draw' ? '引き分け' : s.winner === HUMAN ? 'あなたの勝ち' : 'CPU の勝ち');
   render();
+  snd(() => S.result(s.winner === 'draw' ? 'draw' : s.winner === HUMAN ? 'victory' : 'defeat'));
   setTimeout(() => {
     if (id === game.id && game.mode === 'over') V.showResult(game);
   }, 350);
@@ -286,6 +312,7 @@ function finish() {
 
 /** リーダー以外が倒されてダイスが強化されたら、何が変わったかを伝える */
 function announceDiceUp(prev, nextState, events) {
+  let stinger = null;
   for (const e of events) {
     if (e.type !== 'kill' || cfg.unitType[e.unit] === LEADER) continue;
     const side = cfg.unitSide[e.unit];
@@ -314,7 +341,10 @@ function announceDiceUp(prev, nextState, events) {
     log('dice', text);
     V.toast(html, side === HUMAN ? 'h' : 'm', 3000);
     V.pulseStage(side);
+    // 実際に強化されたときだけ、主題を引用したジングル（1 回の行動で 2 体倒れても 1 回）
+    if (changed) stinger = side;
   }
+  if (stinger !== null) snd(() => S.stageUp(stinger));
 }
 
 /** 強化の印は、強化された陣営の次のターンが終わるまで残す */
@@ -441,6 +471,7 @@ function confirmPreview() {
 
 function setMsg(text, cls = '', inspect = -1) {
   game.msg = { text, cls, inspect };
+  if (cls === 'error') snd(() => S.error());
   render();
 }
 
@@ -459,6 +490,7 @@ function onCell(c) {
   if (mine && u >= 0 && u === prevInspect) {
     game.preview = null;
     game.sel = u;
+    snd(() => S.select());
     return render();
   }
   if (mine) {
@@ -469,12 +501,14 @@ function onCell(c) {
     if (m) {
       if (settings.quick) return act(m && { type: 'move', unit: game.sel, to: c });
       game.preview = movePreview(m);
+      snd(() => S.preview('move'));
       return render();
     }
     if (u >= 0 && cfg.unitSide[u] !== HUMAN) {
       const a = R.attackOptions(s, game.sel).find((o) => o.target === u);
       if (a) {
         game.preview = attackPreview(a);
+        snd(() => S.preview('attack'));
         return render();
       }
       // 攻撃できない理由（コアの判定文）
@@ -492,6 +526,7 @@ function onCell(c) {
   // 駒をタップすると選択（敵は情報の表示のみ）。もう一度タップか空きマスで解除
   game.preview = null;
   game.sel = u >= 0 && u !== game.sel ? u : -1;
+  if (game.sel >= 0) snd(() => S.select());
   render();
 }
 
@@ -502,6 +537,7 @@ function selectOwn(k) {
   game.preview = null;
   game.msg = null;
   game.sel = game.sel === u ? -1 : u;
+  if (game.sel >= 0) snd(() => S.select());
   render();
 }
 
@@ -523,6 +559,11 @@ function onMain() {
 function onKey(e) {
   const tag = e.target && e.target.tagName;
   if (tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA') return;
+  // キーの押しっぱなし（自動リピート）は無視する（「もう一度押して確定」を飛ばさないように）
+  if (e.repeat) {
+    if (e.key === 'Enter' || e.code === 'Space') e.preventDefault();
+    return;
+  }
   if (e.key === 'Escape') {
     if (V.sheetOpen()) V.closeSheets();
     else if (!document.getElementById('result').hidden) V.hideResult();
@@ -684,6 +725,33 @@ function applySettingsUI() {
   document.getElementById('set-calm').checked = settings.calm;
   document.body.classList.toggle('calm', settings.calm);
   FX.setCalm(settings.calm);
+  const a = AE.settings;
+  document.getElementById('set-sfx').checked = a.sfx;
+  document.getElementById('set-sfx-vol').value = Math.round(a.sfxVol * 100);
+  document.getElementById('set-sfx-vol').disabled = !a.sfx;
+  document.getElementById('set-bgm').checked = a.bgm;
+  document.getElementById('set-bgm-vol').value = Math.round(a.bgmVol * 100);
+  document.getElementById('set-bgm-vol').disabled = !a.bgm;
+  // 消音ボタン: 表示の文言は「消音」のまま、状態は aria-pressed と色・アイコンで示す
+  const mute = document.getElementById('btn-mute');
+  mute.setAttribute('aria-pressed', String(a.mute));
+  mute.querySelector('.aux-ico').textContent = a.mute ? '×' : '♪';
+  // BGM を書き出せない環境ではオンにできない
+  if (!Music.supported()) {
+    document.getElementById('set-bgm').disabled = true;
+    document.getElementById('set-bgm-vol').disabled = true;
+  }
+}
+
+/** 音の設定を変えたら、保存して音量・BGM に反映する（決着後は BGM を再開しない） */
+function applyAudio() {
+  AE.saveSettings();
+  AE.applyVolumes();
+  if (bgmWanted()) Music.start();
+  else Music.stop(0.6);
+  // 消音したとき、効果音も BGM もオフにしたときは、鳴っているジングルも止める
+  if (AE.settings.mute || (!AE.settings.sfx && !AE.settings.bgm)) snd(() => S.stopStinger(0.1));
+  applySettingsUI();
 }
 
 /** 新しいゲーム: 対局の途中なら、もう一度押して確定 */
@@ -750,6 +818,54 @@ document.getElementById('set-calm').addEventListener('change', (e) => {
 });
 document.addEventListener('keydown', onKey);
 
+// 音: 設定と、最初の操作での再生開始（ブラウザの自動再生の制限のため）
+document.getElementById('set-sfx').addEventListener('change', (e) => {
+  AE.settings.sfx = e.target.checked;
+  applyAudio();
+  snd(() => S.select());
+});
+document.getElementById('set-sfx-vol').addEventListener('input', (e) => {
+  AE.settings.sfxVol = +e.target.value / 100;
+  AE.applyVolumes();
+});
+document.getElementById('set-sfx-vol').addEventListener('change', () => {
+  applyAudio();
+  snd(() => S.select());
+});
+document.getElementById('set-bgm').addEventListener('change', (e) => {
+  AE.settings.bgm = e.target.checked;
+  applyAudio();
+});
+document.getElementById('set-bgm-vol').addEventListener('input', (e) => {
+  AE.settings.bgmVol = +e.target.value / 100;
+  AE.applyVolumes();
+});
+document.getElementById('set-bgm-vol').addEventListener('change', applyAudio);
+document.getElementById('btn-mute').addEventListener('click', () => {
+  AE.settings.mute = !AE.settings.mute;
+  applyAudio();
+});
+// タッチ端末では pointerdown では再生が許可されないため、pointerup / touchend / click でも呼ぶ。
+// iOS の通話・画面ロックなどで止まった AudioContext も次の操作で再開できるよう、リスナーは外さない
+// （中身は状態を見て必要なときだけ resume する軽い処理）。Web Audio が使えない環境では外す。
+const UNLOCK_EVENTS = ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown'];
+const unlockAudio = () => {
+  AE.unlock();
+  if (AE.unavailable()) for (const t of UNLOCK_EVENTS) document.removeEventListener(t, unlockAudio, true);
+};
+for (const t of UNLOCK_EVENTS) document.addEventListener(t, unlockAudio, true);
+// BGM の書き出しに失敗したら、設定画面の BGM をオンにできない表示にする
+Music.onFail(() => applySettingsUI());
+AE.onUnlock(() => {
+  // 書き出しなどの重い処理は入力のイベントの外で行う
+  setTimeout(() => {
+    if (bgmWanted()) snd(() => Music.start());
+    const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 200));
+    idle(() => snd(() => S.warm()));
+  }, 0);
+});
+applySettingsUI();
+
 // 動作確認・デバッグ用（ブラウザのコンソールから参照できる）
-window.__dt = { game, cfg, settings, act, roll: humanRoll, end: endHumanTurn, newGame, R };
+window.__dt = { game, cfg, settings, act, roll: humanRoll, end: endHumanTurn, newGame, R, audio: { AE, S, Music } };
 newGame();

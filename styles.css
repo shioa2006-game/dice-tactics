@@ -1435,8 +1435,8 @@ button {
 .aux {
   flex: none;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 5px;
 }
 .aux-btn {
   display: flex;
@@ -1624,6 +1624,22 @@ button {
 .settings .row.check {
   justify-content: flex-start;
   font-size: 13px;
+}
+.settings .row.audio .check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 96px;
+  font-size: 14px;
+}
+.settings input[type='range'] {
+  flex: 1;
+  max-width: 260px;
+  height: 32px;
+  accent-color: var(--gold);
+}
+.settings input[type='range']:disabled {
+  opacity: 0.35;
 }
 .settings input[type='checkbox'] {
   width: 22px;
