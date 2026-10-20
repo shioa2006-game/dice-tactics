@@ -577,7 +577,7 @@ export function showResult(game) {
 
 /**
  * タイトル画面を描く。
- * @param {{levels: string[], info: object, selected: string, first: string, records: object, tag: {level, text}|null}} o
+ * @param {{levels: string[], info: object, maxStars: number, selected: string, first: string, records: object, tag: {level, text}|null}} o
  */
 export function renderTitle(o) {
   if (!$('#title-orn').innerHTML) $('#title-orn').innerHTML = A.rosetteSVG() + A.rosetteSVG() + A.rosetteSVG();
@@ -587,7 +587,7 @@ export function renderTitle(o) {
       const r = o.records[k];
       const rec = r && r.w + r.l + r.d > 0 ? `<span class="level-record">${r.w}勝 ${r.l}敗${r.d ? ` ${r.d}分` : ''}</span>` : '';
       const tag = o.tag && o.tag.level === k ? `<span class="level-tag">${escapeHTML(o.tag.text)}</span>` : '';
-      return `<button class="level-btn" role="radio" data-level="${k}" aria-checked="${k === o.selected}"><span class="level-stars" aria-hidden="true">${'★'.repeat(i.stars)}${'☆'.repeat(3 - i.stars)}</span><span class="level-name">${i.name}</span><span class="level-desc">${escapeHTML(i.desc)}</span>${tag}${rec}</button>`;
+      return `<button class="level-btn" role="radio" data-level="${k}" aria-checked="${k === o.selected}"><span class="level-stars" aria-hidden="true">${'★'.repeat(i.stars)}${'☆'.repeat(Math.max(0, o.maxStars - i.stars))}</span><span class="level-name">${i.name}</span><span class="level-desc">${escapeHTML(i.desc)}</span>${tag}${rec}</button>`;
     })
     .join('');
   document.querySelectorAll('#title-first button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.v === o.first)));

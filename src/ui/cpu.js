@@ -42,7 +42,7 @@ function getWorker() {
  * 手番の陣営（state.side）の行動計画を求める。
  * @param {object} state
  * @param {{level?: string, prevStart?: number[], persona?: string|null}} opts
- *   level = 難易度のキー、prevStart = 前のターンの開始時の駒の位置、persona = やさしいの性格のキー
+ *   level = 難易度のキー、prevStart = 前のターンの開始時の駒の位置、persona = EASY の性格のキー
  * @returns {Promise<{actions: object[], info: object}>}
  */
 export function requestPlan(state, { level, prevStart, persona } = {}) {

@@ -8,7 +8,9 @@
 
 ## このリポジトリ
 
-- DICE TACTICS の基本形（10×10・各陣営 6 体・被害連動ダイス・CPU 3 段階。むずかしい = CPU 標準）。ルールは RULES.md、構成は README.md。
-- CPU 標準（ai.js の `CPU`、難易度「むずかしい」）は 1 手も変えない。tests/levels.test.js が照合データと比べて確かめる。
+- DICE TACTICS の基本形（10×10・各陣営 6 体・被害連動ダイス・CPU 4 段階 ROOKIE / EASY / NORMAL / HARD。HARD = CPU 標準）。ルールは RULES.md、構成は README.md。
+- CPU 標準（ai.js の `CPU`、難易度 HARD）は 1 手も変えない。tests/levels.test.js が照合データ（tests/fixtures/standard-golden.json）と比べて確かめる。
+- EASY・NORMAL の判断も変えない。照合データ（tests/fixtures/levels-golden.json）と比べて確かめる。意図して変えるときだけ `node tools/make-golden-levels.mjs` で作り直す。
+- ROOKIE は levels.js の `planRookie`（ターン全体を読まない別の考え方）。強さは `node tools/selfplay.mjs rookie easy 300` で測る（目安: EASY に対して 20〜35%）。
 - `src/core/`（ルール・ダイス・CPU）は UI に依存しない。UI の改善は主に `src/ui/`・`index.html`・`styles.css` で行う。
 - ルールや CPU を変えたら `npm test` を実行する。

@@ -1,20 +1,26 @@
-// DICE TACTICS 基本形 — CPU の難易度
+// DICE TACTICS 基本形 — CPU の難易度（表示名 ROOKIE・EASY・NORMAL・HARD。キーは rookie・easy・normal・hard）
 //
-//   やさしい  はじめての人向け。ふつうを土台に、1 局ごとに「初心者らしい思い違い」を 1 つ持つ（性格。対局の開始時に決める）
+//   ROOKIE    はじめての対局向け。ほかの難易度と違い、ターン全体の手順を読まない（planRookie）。
+//             1 体ずつ「いま見えている一番よさそうな行動」を選ぶので、目の前の攻撃や弱った駒への追撃はするが、
+//             複数の駒を組み合わせた連携や、遠くから回り込んでリーダーを狙う手はほとんど指さない。
+//             相手の弓は 3 マスまで・魔法は岩を越えないと思っていて、リーダー以外の駒は大きな出目への備えも甘い。
+//             前へ出たがる（寄せる重みが標準の 2 倍）。駒が残り少ない相手には、多少の反撃は気にせず敵リーダーへ寄せる
+//   やさしい  （EASY）基本操作を覚えた人向け。ふつうを土台に、1 局ごとに「初心者らしい思い違い」を 1 つ持つ（性格。対局の開始時に決める）
 //               飛び道具に不慣れ: 弓の射程は 3 マス、弓の押し出しはない、魔法は岩を越えない、と思っている
 //               王さま一直線    : 敵リーダーを狙える位置へまっすぐ寄せる。弓の押し出しを忘れている
 //             思い違いは「実ルールよりできることが少ない」ものだけなので、指す手は必ず合法（押し出しの食い違いは指し直す）
-//   ふつう    これまでの CPU と同じ読みを土台に、大きな出目への備えを甘くし、読む量を減らし、
+//   ふつう    （NORMAL）これまでの CPU と同じ読みを土台に、大きな出目への備えを甘くし、読む量を減らし、
 //             ほぼ同じ評価の手からときどき 2 番手以下を選ぶ（これまでの CPU に対して約 2 割の強さ）
-//   むずかしい これまでの CPU（標準）そのもの。1 手も変えない（tests/levels.test.js の照合で確かめる）
+//   むずかしい （HARD）これまでの CPU（標準）そのもの。1 手も変えない（tests/levels.test.js の照合で確かめる）
 //
 // どの難易度も、ルールとダイスは同じ。CPU は未来の出目を見ない。違うのは考え方だけ。
-// 勝てる手順があれば必ず指し、想定内の出目でリーダーを無防備にさらさず、駒を行ったり来たりさせない（安全柵）。
+// EASY・NORMAL・HARD は、勝てる手順があれば必ず指し、想定内の出目でリーダーを無防備にさらさず、駒を行ったり来たりさせない（安全柵）。
 // やさしいの安全柵は実ルールで確かめる: 実ルールで見えている勝ちは取り、中央値以下の出目でリーダーを取られる形なら思い違いをやめる。
 
-import { CPU, planTurn, replySearch, makeCtx, enumerateTurn, beamTurn, actionsOf, WIN_SCORE } from './ai.js';
-import { ARCHER, MAGE, DIRS } from './config.js';
-import { cloneState, validateAction, applyAction } from './rules.js';
+import { CPU, planTurn, replySearch, makeCtx, enumerateTurn, beamTurn, actionsOf, WIN_SCORE, attackCostMatrix, cappedDist, material, positional, valueTable, aggroFactor } from './ai.js';
+import { LEADER, ARCHER, MAGE, DIRS, ATTACKED } from './config.js';
+import { cloneState, validateAction, applyAction, occupancy, reachable, attackTargetsFrom, canMove, roundOf } from './rules.js';
+import { apDistribution } from './dice.js';
 
 // 読む量を減らす（5AP の全列挙をやめ、反撃の読みを狭くする）
 const LIGHT = { exactMaxAP: 4, topK: 8, topSafe: 3, topGain: 3, replyBeam: { eval: 4, flee: 1, expand: 2 }, replyNodeCap: 40 };
@@ -53,8 +59,25 @@ const EASY = {
   personas: { rangedNovice: 1, rushKnock: 1 }, // 性格の重み（pickPersona）
 };
 
+// ROOKIE（はじめての対局向け）。ターン全体の手順を読まない別の考え方で指す（planRookie）
+const ROOKIE = {
+  name: 'ROOKIE',
+  planner: 'rookie',
+  params: { ...CPU.params, approach: [0, 0.2, 0.15, 0.15], engage: [0, 0.3, 0.2, 0.2] }, // 前へ出たがる（寄せる重みが標準の 2 倍）
+  vision: 3, // 移動してから攻撃する手は、移動 3 マスまでしか考えない（遠くから回り込む攻撃は見落とす）
+  wDanger: 0.8, // 相手の次のターンに受けそうな損害の重み
+  leaderDanger: 150, // 自分のリーダーが倒されそうな形の重さ
+  minGain: 0.1, // これより得にならない行動はしない（意味のない移動をしない）
+  noise: 0.6, // 評価のばらつき（同じくらいの手から気まぐれに選ぶ）
+  backtrack: 3, // 駒を前のターンの位置へ戻す行動の減点（往復を防ぐ）
+  huntApproach: 4, // 追い込み（相手の駒が残り少ない）ときの、敵リーダーへ寄せる重みの倍率
+  huntUnitDanger: 0.4, // 追い込みのときの、リーダー以外の駒の危険の重み
+  perceive: { [MAGE]: { obstacleBlocks: true }, [ARCHER]: { maxRange: 3 } }, // 相手の弓・魔法が届く範囲の見積もりが甘い
+};
+
 /** 難易度の一覧（表示順）。hard はこれまでの CPU オブジェクトそのもの */
 export const LEVELS = {
+  rookie: ROOKIE,
   easy: EASY,
   normal: NORMAL,
   hard: CPU,
@@ -62,12 +85,14 @@ export const LEVELS = {
 
 /** 画面に出す名前と説明 */
 export const LEVEL_INFO = {
-  easy: { name: 'やさしい', stars: 1, desc: 'はじめての方に。弓の射程や押し出しを勘違いしたり、王さまへ一直線に攻めたりする CPU' },
-  normal: { name: 'ふつう', stars: 2, desc: '大きな出目への備えが甘く、ときどき次善の手を選ぶ CPU。ルールを覚えたら挑戦' },
-  hard: { name: 'むずかしい', stars: 3, desc: 'これまでの CPU。手ごわいけれど、読み勝てる相手' },
+  rookie: { name: 'ROOKIE', stars: 1, desc: 'はじめての対局に。基本的な移動・攻撃を覚えながら、勝利を目指そう' },
+  easy: { name: 'EASY', stars: 2, desc: '基本操作を覚えた方に。弓の射程や押し出しを勘違いしたり、王さまへ一直線に攻めたりする CPU' },
+  normal: { name: 'NORMAL', stars: 3, desc: '大きな出目への備えが甘く、ときどき次善の手を選ぶ CPU。ルールを覚えたら挑戦' },
+  hard: { name: 'HARD', stars: 4, desc: 'これまでの CPU。手ごわいけれど、読み勝てる相手' },
 };
 
-export const DEFAULT_LEVEL = 'normal';
+/** はじめて遊ぶ人（保存された設定がない）の難易度 */
+export const DEFAULT_LEVEL = 'rookie';
 
 /** 難易度のキーから CPU の設定を引く（知らないキーはむずかしい = これまでの CPU） */
 export const cpuFor = (level) => LEVELS[level] || CPU;
@@ -194,6 +219,131 @@ function planPersona(state, cpu, key, opts) {
   return { actions, info: { ...r.info, persona: key } };
 }
 
+// ---------------------------------------------------------------------------
+// ROOKIE: ターン全体の手順は読まず、1 体ずつ「いま見えている一番よさそうな行動」を選んでいく
+// ---------------------------------------------------------------------------
+
+const DG_OCC = new Int8Array(256);
+const DG_COST = new Int8Array(64);
+
+/**
+ * ROOKIE の見積もる「相手の次のターンに受ける損害」。弓は 3 マスまで、魔法は岩を越えないと思っている。
+ * リーダー以外は相手の AP を中央値と思って数える（大きな出目への備えが甘い）。相手の駒どうしの兼ね合いは考えない
+ */
+function rookieDanger(s, me, ctx, cpu) {
+  const cfg = s.cfg;
+  const NP = cfg.perSide;
+  const A = ctx.oppAP;
+  const costs = attackCostMatrix({ cfg: ctx.pc, pos: s.pos, hp: s.hp }, me ^ 1, occupancy(s, DG_OCC), ctx.oppMax, DG_COST);
+  const mine = cfg.sideUnits[me];
+  let sum = 0;
+  let max = 0;
+  for (let j = 0; j < NP; j++) {
+    const u = mine[j];
+    if (s.pos[u] < 0) continue;
+    // 安い攻撃から順に、AP の範囲で何回殴られるか（相手の駒どうしの兼ね合いは考えない）
+    const t = cfg.unitType[u];
+    const hp = s.hp[u];
+    const cs = [];
+    for (let i = 0; i < NP; i++) if (costs[i * NP + j] <= ctx.oppMax) cs.push(costs[i * NP + j]);
+    if (!cs.length) continue;
+    cs.sort((a, b) => a - b);
+    const VAL = ctx.VAL[t];
+    // AP が a のときに殴られる回数（安い攻撃から順に）での損害
+    const lossAt = (a) => {
+      let k = 0;
+      for (let i = 0, spent = 0; i < cs.length && spent + cs[i] <= a; i++, k++) spent += cs[i];
+      if (k >= hp) return t === LEADER ? cpu.leaderDanger : VAL[hp];
+      return VAL[hp] - VAL[hp - k];
+    };
+    let loss = 0;
+    if (t === LEADER) {
+      // リーダーだけは大きな出目も考える（出目の分布での期待値）
+      for (const [a, p] of ctx.oppDist) loss += p * lossAt(a);
+    } else loss = ctx.unitDanger * lossAt(A);
+    sum += loss;
+    if (loss > max) max = loss;
+  }
+  return max + 0.3 * (sum - max);
+}
+
+function rookieEval(s, me, ctx, cpu) {
+  if (s.winner === me) return WIN_SCORE * 10;
+  const { VAL, aggro } = ctx;
+  // 位置は自分の駒の分だけ見る（相手の駒の配置の良し悪しまでは考えない）
+  return material(s, me, VAL) - material(s, me ^ 1, VAL) + positional(s, me, ctx.myP, aggro) - cpu.wDanger * rookieDanger(s, me, ctx, cpu);
+}
+
+/** ユニット u の 1 体分の行動案（攻撃だけ・移動だけ・近くへ移動して攻撃） */
+function unitPlans(s, u, cpu) {
+  const cfg = s.cfg;
+  const T = cfg.types[cfg.unitType[u]];
+  const occ = occupancy(s);
+  const out = [];
+  const canHit = (s.flags[u] & ATTACKED) === 0 && s.ap >= T.attackCost;
+  if (canHit) for (const x of attackTargetsFrom(s, u, s.pos[u], occ)) out.push([{ type: 'attack', unit: u, target: x.target }]);
+  if (!canMove(s, u)) return out;
+  const { dist } = reachable(s, u, s.ap);
+  const mc = cfg.rules.moveCost;
+  for (let c = 0; c < cfg.CELLS; c++) {
+    const d = dist[c];
+    if (d <= 0) continue;
+    const mv = { type: 'move', unit: u, to: c };
+    out.push([mv]);
+    if (canHit && d <= cpu.vision && s.ap - d * mc >= T.attackCost) {
+      for (const x of attackTargetsFrom(s, u, c, occ)) out.push([mv, { type: 'attack', unit: u, target: x.target }]);
+    }
+  }
+  return out;
+}
+
+/** ROOKIE の計画。行動はすべて applyAction（実ルール）で 1 つずつ適用して確かめる */
+function planRookie(state, cpu, { rng = Math.random, prevStart } = {}) {
+  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const cfg = state.cfg;
+  const me = state.side;
+  const P = cpu.params;
+  const dist = apDistribution(state.lost[me ^ 1]);
+  const ctx = {
+    VAL: valueTable(cfg, P),
+    aggro: aggroFactor(P, roundOf(state)),
+    pc: perceivedCfg(cfg, 'rookie', cpu.perceive),
+    oppAP: cappedDist(dist, 0.5).max, // リーダー以外の駒の危険は、相手の AP を中央値と思って見積もる
+    oppMax: dist[dist.length - 1][0],
+    oppDist: dist,
+  };
+  // 追い込み: 相手の駒（リーダー以外）が 1 体以下か、こちらが 2 体以上多いときは、多少の反撃は気にせず敵リーダーへ寄せる
+  const army = (side) => cfg.sideUnits[side].filter((u) => u !== cfg.leaderOf[side] && state.pos[u] >= 0).length;
+  const hunt = army(me ^ 1) <= 1 || army(me) - army(me ^ 1) >= 2;
+  ctx.myP = hunt ? { ...P, approach: P.approach.map((x) => x * cpu.huntApproach) } : P;
+  ctx.unitDanger = hunt ? cpu.huntUnitDanger : 1;
+  let s = state;
+  const actions = [];
+  let cur = rookieEval(s, me, ctx, cpu);
+  for (let step = 0; step < 24 && s.phase === 'act' && s.ap > 0; step++) {
+    let best = null;
+    for (const u of cfg.sideUnits[me]) {
+      if (s.pos[u] < 0) continue;
+      for (const plan of unitPlans(s, u, cpu)) {
+        let t = s;
+        for (const a of plan) t = applyAction(t, a).state;
+        let v = rookieEval(t, me, ctx, cpu);
+        const back = prevStart && plan[0].type === 'move' && plan[0].to === prevStart[u] && state.pos[u] !== prevStart[u];
+        if (back) v -= cpu.backtrack;
+        if (v - cur <= cpu.minGain) continue;
+        const nv = v + (rng() - 0.5) * cpu.noise;
+        if (!best || nv > best.nv) best = { nv, plan, t };
+      }
+    }
+    if (!best) break;
+    actions.push(...best.plan);
+    s = best.t;
+    cur = rookieEval(s, me, ctx, cpu);
+  }
+  const ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+  return { actions, info: { ap: state.ap, planner: 'rookie', ms, ...(s.winner === me ? { reason: 'win' } : {}) } };
+}
+
 /**
  * 難易度つきで行動計画を立てる。
  * @param {object} state 手番の陣営の局面（phase = 'act'）
@@ -202,6 +352,7 @@ function planPersona(state, cpu, key, opts) {
  */
 export function planLevel(state, { level, rng, prevStart, persona } = {}) {
   const cpu = cpuFor(level);
+  if (cpu.planner === 'rookie') return planRookie(state, cpu, { rng, prevStart });
   if (cpu.personas && persona && PERSONAS[persona]) return planPersona(state, cpu, persona, { rng, prevStart });
   return planTurn(state, { cpu, rng, prevStart });
 }

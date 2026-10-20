@@ -1168,4 +1168,4 @@ function now() {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
-export { actionsOf, makeCtx, cappedDist, pickNearBest };
+export { actionsOf, makeCtx, cappedDist, pickNearBest, material, positional, valueTable, aggroFactor };

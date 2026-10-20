@@ -94,7 +94,7 @@ function newGame() {
     stats: [newStats(), newStats()],
     level,
     levelInfo: LEVEL_INFO[level],
-    cpuPersona: pickPersona(level), // やさしいの性格（1 局に 1 つ。ほかの難易度は null）
+    cpuPersona: pickPersona(level), // EASY の性格（1 局に 1 つ。ほかの難易度は null）
     cpuPrevStart: null,
     record: null,
     suggest: '',
@@ -594,10 +594,10 @@ function onKey(e) {
     if (e.key === 'Enter' || e.code === 'Space') e.preventDefault();
     return;
   }
-  // タイトル画面: 1〜3 で難易度を選び、Enter / Space ではじめる（フォーカス中のボタンはそのボタンに任せる）
+  // タイトル画面: 1〜4 で難易度を選び、Enter / Space ではじめる（フォーカス中のボタンはそのボタンに任せる）
   if (V.titleOpen()) {
     const keys = Object.keys(LEVELS);
-    if (/^[1-3]$/.test(e.key) && keys[+e.key - 1]) {
+    if (/^[1-9]$/.test(e.key) && keys[+e.key - 1]) {
       titleLevel = keys[+e.key - 1];
       renderTitle();
     } else if ((e.key === 'Enter' || e.code === 'Space') && tag !== 'BUTTON') {
@@ -695,15 +695,27 @@ function leaderDanger(s) {
 // 平均 AP の小数部は切り捨てる（4.0 が浮動小数点の誤差で 3.999… にならないよう微小値を足す）
 const threatBudget = (s, side) => Math.floor(meanAP(apDistribution(s.lost[side])) + 1e-9);
 
+// ROOKIE の最初の 3 ラウンドだけ、情報行に操作のヒントを 1 行ずつ出す（読まなくても遊べる。チュートリアルではない）
+const ROOKIE_TIPS = [
+  'ヒント：AP は 6 体みんなで使います。移動は 1 マス 1AP、攻撃は王・戦士 1AP、弓・魔 2AP',
+  'ヒント：弓は 2〜4 マス先を撃てて、当てた敵を 1 マス押し出します（隣の敵は撃てません）',
+  'ヒント：魔法は岩を越えて 2 マス先まで届きます。敵の駒をタップすると、その敵の届く範囲が見られます',
+];
+function rookieTip(s) {
+  const r = R.roundOf(s);
+  return game.level === 'rookie' && r >= 1 && r <= ROOKIE_TIPS.length ? `<span class="tip">${ROOKIE_TIPS[r - 1]}</span>` : '';
+}
+
 function computeHints() {
   const s = game.state;
   let hint = '';
   let sub = '';
   let canAct = false;
+  const tip = rookieTip(s);
   if (game.mode === 'roll') {
     const st = R.diceStageOf(s, HUMAN);
     hint = 'ダイスを振って、このターンの AP を決めましょう。';
-    sub = game.notice && game.notice.side === HUMAN ? `<span class="em-kill">ダイスが ▲${st} に強化されています — 最大 ${maxAP(s.lost[HUMAN])}AP！</span>` : `▲${st}：ダイス ${R.diceMaxOf(s, HUMAN).join('・')} → 1〜${maxAP(s.lost[HUMAN])}AP`;
+    sub = game.notice && game.notice.side === HUMAN ? `<span class="em-kill">ダイスが ▲${st} に強化されています — 最大 ${maxAP(s.lost[HUMAN])}AP！</span>` : tip || `▲${st}：ダイス ${R.diceMaxOf(s, HUMAN).join('・')} → 1〜${maxAP(s.lost[HUMAN])}AP`;
   } else if (game.mode === 'act') {
     const ready = [];
     for (const u of cfg.sideUnits[HUMAN]) {
@@ -718,7 +730,7 @@ function computeHints() {
       hint = `残り ${s.ap}AP：動かす駒をタップ`;
       if (ready.length) sub = `今すぐ攻撃できる：<b>${ready.join('・')}</b>（左上に <b>!</b>）`;
       else if (s.ap <= 2) sub = `AP ${s.ap} でできること：${s.ap === 1 ? '1 マス移動、または王・戦士の攻撃' : '2 マス移動、または攻撃 1 回（弓・魔は 2AP）'}`;
-      else sub = '攻撃できる敵はいません。移動で位置を整えましょう。';
+      else sub = tip || '攻撃できる敵はいません。移動で位置を整えましょう。';
     }
   }
   if (game.threat && (game.mode === 'roll' || game.mode === 'act')) {
@@ -745,8 +757,8 @@ function render() {
 // ---------------------------------------------------------------------------
 
 /**
- * 設定を読む。難易度（level）の既定は、はじめての人なら「やさしい」、これまで遊んでいた人（設定は保存されているが
- * 難易度がない）なら「むずかしい」（= これまでの CPU。知らないうちに強さが変わらないように）。
+ * 設定を読む。難易度（level）の既定は、はじめての人なら ROOKIE、これまで遊んでいた人（設定は保存されているが
+ * 難易度がない）なら HARD（= これまでの CPU。知らないうちに強さが変わらないように）。
  */
 function loadSettings() {
   const def = { first: 'human', speed: 'normal', quick: false, calm: false };
@@ -758,7 +770,7 @@ function loadSettings() {
   }
   const s = { ...def, ...(saved || {}) };
   if (!LEVELS[s.level]) {
-    s.level = saved ? 'hard' : 'easy';
+    s.level = saved ? 'hard' : DEFAULT_LEVEL; // はじめての人は ROOKIE、難易度のなかった頃の設定はこれまでの CPU
     s.levelTag = saved ? 'これまでの CPU' : 'はじめての方に';
   }
   return s;
@@ -788,7 +800,7 @@ function recordResult(winner) {
     // 保存できない環境では記録しない
   }
   game.record = r;
-  // やさしいは、対局の後で CPU の思い違い（性格）を明かす。次の対局の作戦につながるように
+  // EASY は、対局の後で CPU の思い違い（性格）を明かす。次の対局の作戦につながるように
   game.personaHint = game.cpuPersona && PERSONAS[game.cpuPersona] ? PERSONAS[game.cpuPersona].hint : '';
   // 勝ち越してきたら、ひとつ上の難易度をすすめる
   const order = Object.keys(LEVELS);
@@ -813,7 +825,8 @@ function renderTitle() {
       if (r && r.w >= 3 && r.w > r.l && !(recs[order[i + 1]] && recs[order[i + 1]].w + recs[order[i + 1]].l > 0)) tag = { level: order[i + 1], text: '挑戦してみよう' };
     }
   }
-  V.renderTitle({ levels: Object.keys(LEVELS), info: LEVEL_INFO, selected: titleLevel, first: settings.first, records: recs, tag });
+  const maxStars = Math.max(...Object.values(LEVEL_INFO).map((i) => i.stars));
+  V.renderTitle({ levels: Object.keys(LEVELS), info: LEVEL_INFO, maxStars, selected: titleLevel, first: settings.first, records: recs, tag });
 }
 
 /** タイトル画面を出す（対局は止める） */
