@@ -771,7 +771,7 @@ function loadSettings() {
   const s = { ...def, ...(saved || {}) };
   if (!LEVELS[s.level]) {
     s.level = saved ? 'hard' : DEFAULT_LEVEL; // はじめての人は ROOKIE、難易度のなかった頃の設定はこれまでの CPU
-    s.levelTag = saved ? 'これまでの CPU' : 'はじめての方に';
+    s.levelTag = saved ? 'いままでと同じ強さ' : 'はじめての方に';
   }
   return s;
 }

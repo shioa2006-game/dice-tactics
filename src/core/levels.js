@@ -85,10 +85,10 @@ export const LEVELS = {
 
 /** 画面に出す名前と説明 */
 export const LEVEL_INFO = {
-  rookie: { name: 'ROOKIE', stars: 1, desc: 'はじめての対局に。基本的な移動・攻撃を覚えながら、勝利を目指そう' },
-  easy: { name: 'EASY', stars: 2, desc: '基本操作を覚えた方に。弓の射程や押し出しを勘違いしたり、王さまへ一直線に攻めたりする CPU' },
-  normal: { name: 'NORMAL', stars: 3, desc: '大きな出目への備えが甘く、ときどき次善の手を選ぶ CPU。ルールを覚えたら挑戦' },
-  hard: { name: 'HARD', stars: 4, desc: 'これまでの CPU。手ごわいけれど、読み勝てる相手' },
+  rookie: { name: 'ROOKIE', stars: 1, desc: 'はじめての対局に。目の前の敵を素直に攻めてくる相手。まずは移動と攻撃に慣れよう' },
+  easy: { name: 'EASY', stars: 2, desc: 'ルールを覚えたら。弓や魔法の届く範囲を見誤ったり、王へ一直線に攻めたりする相手' },
+  normal: { name: 'NORMAL', stars: 3, desc: '慣れてきたら。先を読んで攻めてくるが、大きな出目への備えが甘く、隙を見せることも' },
+  hard: { name: 'HARD', stars: 4, desc: '腕に自信があるなら。何手も先まで読み、守りも固い。出目を活かして読み勝とう' },
 };
 
 /** はじめて遊ぶ人（保存された設定がない）の難易度 */
